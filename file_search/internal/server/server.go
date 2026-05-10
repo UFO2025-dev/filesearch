@@ -168,7 +168,7 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	winPath := strings.TrimSpace(string(out))
 
-	if err := exec.CommandContext(r.Context(), "cmd.exe", "/C", "start", "", winPath).Run(); err != nil {
+	if err := exec.CommandContext(r.Context(), "/mnt/c/Windows/System32/cmd.exe", "/C", "start", "", winPath).Run(); err != nil {
 		writeError(w, "start: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
