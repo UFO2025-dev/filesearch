@@ -43,6 +43,17 @@ var defaultExcludedDirs = map[string]bool{
 	"bin":          true,
 	"obj":          true,
 	"site-packages": true,
+	// Windows system directories — never index these
+	"Windows":                  true,
+	"System32":                 true,
+	"SysWOW64":                 true,
+	"WinSxS":                   true,
+	"$Recycle.Bin":              true,
+	"System Volume Information": true,
+	"Recovery":                 true,
+	"ProgramData":               true,
+	"Program Files":             true,
+	"Program Files (x86)":       true,
 }
 
 func adaptiveWorkers() int {

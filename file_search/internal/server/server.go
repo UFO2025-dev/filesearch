@@ -29,6 +29,7 @@ var staticFiles embed.FS
 type Server struct {
 	addr           string
 	hwMode         string
+	version        string
 	limiter        *rateLimiterStore
 	token          string
 	db             *db.DB
@@ -43,10 +44,11 @@ type Server struct {
 }
 
 // New creates a new Server. database and emb may be nil for graceful degradation.
-func New(addr, hwMode string, database *db.DB, emb *embedder.Client, roots []string, token string, c *cache.Cache) *Server {
+func New(addr, hwMode, version string, database *db.DB, emb *embedder.Client, roots []string, token string, c *cache.Cache) *Server {
 	return &Server{
 		addr:           addr,
 		hwMode:         hwMode,
+		version:        version,
 		limiter:        newRateLimiterStore(),
 		token:          token,
 		db:             database,
@@ -123,6 +125,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"app":            "filesearch",
+		"version":        s.version,
 		"status":         "ok",
 		"mode":           s.effectiveMode(),
 		"semantic_ready": semanticReady,

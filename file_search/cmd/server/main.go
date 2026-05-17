@@ -24,6 +24,12 @@ import (
 	"gatewatch/file_search/internal/watcher"
 )
 
+// Version is injected at build time via:
+//   -ldflags="-X main.Version=1.0.1"
+// Falls back to "dev" when built without the flag.
+var Version = "dev"
+
+
 // waitForServer polls /health until the server responds or timeout is reached.
 // Returns true if server is ready.
 func waitForServer(url string, timeout time.Duration) bool {
@@ -196,14 +202,14 @@ func main() {
 	}()
 
 	// ── HTTP server ───────────────────────────────────────────────────────
-	slog.Info("starting server", "addr", *addr)
+	slog.Info("starting server", "addr", *addr, "version", Version)
 
 	initMode := hwProfile.Mode.String()
 	if snapshot.ModeOverride != "" {
 		initMode = snapshot.ModeOverride
 	}
 
-	srv := server.New(*addr, initMode, database, embClient, roots, *token, searchCache)
+	srv := server.New(*addr, initMode, Version, database, embClient, roots, *token, searchCache)
 	srv.SetDBPath(*dbPath)
 	srv.SetConfig(cfg)
 
