@@ -36,9 +36,14 @@ func (d *DB) DeleteVector(ctx context.Context, path string) error {
 	return err
 }
 
-// AllVectors loads all stored embeddings into memory for similarity search.
+// AllVectors loads stored embeddings into memory for similarity search.
+// Capped at 50 000 most-recently-indexed files to avoid OOM on large corpora.
+const maxVectors = 50_000
+
 func (d *DB) AllVectors(ctx context.Context) (map[string][]float32, error) {
-	rows, err := d.conn.QueryContext(ctx, `SELECT path, vector FROM embeddings`)
+	rows, err := d.conn.QueryContext(ctx,
+		`SELECT path, vector FROM embeddings ORDER BY indexed_at DESC LIMIT ?`,
+		maxVectors)
 	if err != nil {
 		return nil, err
 	}
