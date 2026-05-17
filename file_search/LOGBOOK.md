@@ -999,3 +999,268 @@ L'onglet ⚙️ Paramètres était en lecture seule. Il est maintenant **entièr
 | Filtres UI | ✅ type + date |
 | Ouverture fichiers | ✅ WSL → Windows Explorer |
 | Packaging | ⏳ Phase 4 — prochaine étape |
+
+---
+
+## SESSION 2026-05-17 — Productisation Windows + Audit CTO + Feuille de route 90/100
+
+---
+
+### 1. Version injection + Exclusions répertoires système Windows
+
+#### Commit : 
+
+**Problème :** Le binaire ne savait pas sa propre version. L'endpoint  ne retournait pas de version. Impossible de diagnostiquer quelle version tourne chez un client.
+
+**Fix appliqué :**
+-  déclaré dans  (après le bloc import, conforme Go spec)
+- Commande build mise à jour : 
+-  accepte maintenant un 3ème paramètre 
+-  retourne : 
+- Log de démarrage : 
+-  mis à jour (appels  avec )
+
+**Exclusions système Windows ajoutées dans  :**
+
+Un utilisateur qui indexe cmd/server/main.govar Versionserver.New(... Version ...)internal/server/server.goversion stringNew()/healthinternal/server/server_test.goserver.New()"dev"internal/indexer/indexer.godefaultExcludedDirsdata/index.dbmain.go:148-149mtimedb.go:318-324cleanRoot+"/"filepath.Separatorserver.go:529pdftotextindexer.go:1192extfmt.Sprintfdb.go:314-316C:` via POST /api/settings |  |
+| RF-07 | 🔴 P1 |  charge TOUT en RAM — OOM sur 500K fichiers |  |
+| RF-08 | 🟠 P1 | Pas de graceful shutdown — WAL non checkpointé, corruption possible |  |
+| RF-09 | 🟠 P1 |  pour compter — 25 MB/appel, polled fréquemment |  |
+| RF-10 | 🟠 P2 | Cache pagination cassée — ,  toujours |  |
+| RF-11 | 🟠 P2 | Watcher sature les handles inotify Windows sur >10K sous-répertoires |  |
+| RF-12 | 🟠 P2 | Log file jamais fermé, jamais roté — croissance infinie |  |
+| RF-13 | 🟠 P2 | Aucune validation du répertoire dans  |  |
+| RF-14 | 🟡 P2 | Pas d'onboarding — premier lancement = page blanche | UI |
+| RF-15 | 🟡 P3 | Rate limiter goroutine non annulable — lifecycle incomplet |  |
+
+#### Scores par catégorie
+
+| Catégorie | Score |
+|-----------|-------|
+| Architecture | 52/100 |
+| Sécurité | 41/100 |
+| Performance | 47/100 |
+| Windows readiness | 38/100 |
+| UX | 33/100 |
+| Observabilité | 54/100 |
+| Enterprise readiness | 18/100 |
+| Business readiness | 39/100 |
+| **GLOBAL** | **44/100** |
+
+#### Verdict CTO
+> *"Le moteur est bien plus mature que son packaging. 4 bugs P0 rendent le produit inutilisable dans son scénario cible. La fondation FTS5 + hash-dedup est intelligente. Le code n'est pas à réécrire — il est à finir. 3-5 jours pour passer à shippable."*
+
+---
+
+### 3. Feuille de route 44/100 → 90/100
+
+**28 todos enregistrés en SQL avec dépendances.**
+
+#### Phase 1 — Débloquer le produit  (2-3 jours)
+- P1-1 : Chemins absolus pour  (os.Executable ou %APPDATA%)
+- P1-2 : Colonne  dans le schéma SQLite + remplissage à l'indexation
+- P1-3 :  dans handleOpen (fix 5 minutes)
+- P1-4 : PDF sur Windows sans pdftotext — intégrer  (pure Go)
+- P1-5 : SQL injection  — paramètre lié dans filterClauses
+- P1-6 : Cache pagination — stocker total+pages dans l'entrée cache
+- P1-7 : Graceful shutdown — signal.NotifyContext + srv.Shutdown + WAL checkpoint
+
+#### Phase 2 — Sécurité & Stabilité  (2-3 jours)
+- P2-1 : CSRF — valider Origin sur POST endpoints
+- P2-2 : AllVectors cap 50K ou sqlite-vec
+- P2-3 : COUNT(*) SQL au lieu de AllPaths()
+- P2-4 : Watcher depth cap (8 niveaux max)
+- P2-5 : Log rotation lumberjack (5MB, 3 backups)
+- P2-6 : Validation dir dans handleSettings
+- P2-7 : Rate limiter goroutine done channel
+
+#### Phase 3 — UX & Onboarding  (2-4 jours)
+- P3-1 : Page onboarding quand indexedRoots vide
+- P3-2 : Barre de progression d'indexation (/api/progress)
+- P3-3 : Messages d'erreur humains dans l'UI
+- P3-4 : Debounce recherche 300ms côté UI
+
+#### Phase 4 — Performance & Scale  (1-2 jours)
+- P4-1 : Streaming extraction gros fichiers
+- P4-2 : sort.Slice au lieu d'insertion sort O(n²)
+- P4-3 : FTS5 OPTIMIZE périodique (toutes les 2h)
+- P4-4 : PRAGMA integrity_check au démarrage
+
+#### Phase 5 — Installateur & Distribution  (1-2 jours)
+- P5-1 : Inno Setup — FileSearch-Setup-v1.0.exe
+- P5-2 : Manifest UAC asInvoker
+- P5-3 : Check mise à jour (GitHub releases API, notification discrète)
+
+#### Phase 6 — Enterprise  (1-2 semaines)
+- P6-1 : Chiffrement DB (SQLCipher / AES-256)
+- P6-2 : Journal d'audit (qui cherche quoi, export CSV)
+- P6-3 : Multi-utilisateur (index partagé NAS, token par user)
+
+---
+
+### État du projet après cette session
+
+| Composant | État |
+|-----------|------|
+| Build Linux | ✅ |
+| Build Windows natif () | ✅  |
+| Tests | ✅ tous packages passent |
+| Version dans binaire | ✅ injectée via ldflags |
+|  retourne version | ✅ |
+| Exclusions système Windows | ✅ 10 répertoires ajoutés |
+| GitHub release v1.0.0 | ✅ https://github.com/UFO2025-dev/filesearch/releases/tag/v1.0.0 |
+| Score audit CTO | 44/100 (mesuré sur code réel) |
+| Feuille de route 90/100 | ✅ 28 todos en SQL avec dépendances |
+| Prochaine étape | Phase 1 — P1-1 chemins absolus |
+
+---
+
+
+---
+
+## SESSION 2026-05-17 — Productisation Windows + Audit CTO + Feuille de route 90/100
+
+---
+
+### 1. Version injection + Exclusions répertoires système Windows
+
+**Commit :** 
+
+**Problème :** Le binaire ne savait pas sa propre version. L'endpoint  ne retournait pas de version. Impossible de diagnostiquer quelle version tourne chez un client.
+
+**Fix appliqué :**
+-  déclaré dans  (après le bloc import)
+- Commande build mise à jour : 
+-  accepte maintenant un 3ème paramètre 
+-  retourne : 
+- Log de démarrage inclut la version
+-  mis à jour (appels  avec )
+
+**Exclusions système Windows ajoutées dans  :**
+
+Windows, System32, SysWOW64, WinSxS, .Bin, System Volume Information, Recovery, ProgramData, Program Files, Program Files (x86)
+
+Un utilisateur qui indexe C:\ ne sature plus son index avec des binaires système.
+
+**Résultat build :** LINUX_OK | WINDOWS_OK | TESTS_OK (tous packages)
+
+**Fichiers modifiés :**
+
+| Fichier | Changement |
+|---------|------------|
+|  | , log startup,  |
+|  | Champ , signature ,  response |
+|  |  + arg  |
+|  | 10 répertoires système Windows dans  |
+
+---
+
+### 2. Audit CTO Distinguished Engineer — Code source complet analysé
+
+**Rôle :** GitHub Copilot a agi comme CTO Distinguished Engineer Microsoft (20+ ans expérience Windows desktop, sécurité produit, Go systems engineering, enterprise).
+
+**Méthodologie :** Lecture de TOUS les fichiers sources réels avant toute conclusion. Aucune hypothèse marketing.
+
+**Score mesuré sur code réel : 44/100**
+
+#### TOP 15 RED FLAGS identifiés
+
+| Criticité | Problème | Fichier |
+|-----------|---------|---------|
+| P0 | Chemins relatifs  — DB perdue au double-clic |  |
+| P0 | Colonne  inexistante — filtres date retournent 0 résultat |  |
+| P0 |  au lieu de  — opens retournent 403 Windows |  |
+| P0 |  absent sur Windows — 100% des PDFs silencieusement ignorés |  |
+| P1 | SQL injection dans filtre  —  non paramétré |  |
+| P1 | CSRF total — tout site web peut indexer C:\ via POST /api/settings |  |
+| P1 |  charge TOUT en RAM — OOM sur 500K fichiers |  |
+| P1 | Pas de graceful shutdown — WAL non checkpointé, corruption possible |  |
+| P1 |  pour compter — 25 MB/appel, polled fréquemment |  |
+| P2 | Cache pagination cassée — ,  toujours |  |
+| P2 | Watcher sature les handles Windows sur >10K sous-répertoires |  |
+| P2 | Log file jamais fermé, jamais roté — croissance infinie |  |
+| P2 | Aucune validation du répertoire dans  |  |
+| P2 | Pas d'onboarding — premier lancement = page blanche | UI |
+| P3 | Rate limiter goroutine non annulable — lifecycle incomplet |  |
+
+#### Scores par catégorie
+
+| Catégorie | Score |
+|-----------|-------|
+| Architecture | 52/100 |
+| Sécurité | 41/100 |
+| Performance | 47/100 |
+| Windows readiness | 38/100 |
+| UX | 33/100 |
+| Observabilité | 54/100 |
+| Enterprise readiness | 18/100 |
+| Business readiness | 39/100 |
+| **GLOBAL** | **44/100** |
+
+**Verdict CTO :**
+> "Le moteur est bien plus mature que son packaging. 4 bugs P0 rendent le produit inutilisable dans son scénario cible. La fondation FTS5 + hash-dedup est intelligente. Le code n'est pas à réécrire — il est à finir. 3-5 jours pour passer à shippable."
+
+---
+
+### 3. Feuille de route 44/100 → 90/100
+
+28 todos enregistrés en SQL avec dépendances.
+
+#### Phase 1 — Débloquer le produit : 44 → 62/100 (2-3 jours)
+- P1-1 : Chemins absolus pour  (os.Executable ou %APPDATA%)
+- P1-2 : Colonne  dans le schéma SQLite + remplissage à l'indexation
+- P1-3 :  dans handleOpen (5 minutes, P0 fix)
+- P1-4 : PDF sur Windows sans pdftotext — intégrer  (pure Go, zero deps)
+- P1-5 : SQL injection  — paramètre lié dans filterClauses
+- P1-6 : Cache pagination — stocker total+pages dans l'entrée cache
+- P1-7 : Graceful shutdown — signal.NotifyContext + srv.Shutdown + WAL checkpoint
+
+#### Phase 2 — Sécurité & Stabilité : 62 → 74/100 (2-3 jours)
+- P2-1 : CSRF — valider Origin sur POST endpoints
+- P2-2 : AllVectors cap 50K ou passer à sqlite-vec
+- P2-3 : COUNT(*) SQL au lieu de AllPaths()
+- P2-4 : Watcher depth cap (8 niveaux max)
+- P2-5 : Log rotation lumberjack (5MB max, 3 backups)
+- P2-6 : Validation dir dans handleSettings
+- P2-7 : Rate limiter goroutine done channel
+
+#### Phase 3 — UX & Onboarding : 74 → 81/100 (2-4 jours)
+- P3-1 : Page onboarding quand indexedRoots vide
+- P3-2 : Barre de progression d'indexation (/api/progress)
+- P3-3 : Messages d'erreur humains dans l'UI
+- P3-4 : Debounce recherche 300ms côté UI
+
+#### Phase 4 — Performance & Scale : 81 → 86/100 (1-2 jours)
+- P4-1 : Streaming extraction gros fichiers
+- P4-2 : sort.Slice au lieu d'insertion sort O(n²)
+- P4-3 : FTS5 OPTIMIZE périodique (toutes les 2h)
+- P4-4 : PRAGMA integrity_check au démarrage
+
+#### Phase 5 — Installateur & Distribution : 86 → 90/100 (1-2 jours)
+- P5-1 : Inno Setup — FileSearch-Setup-v1.0.exe
+- P5-2 : Manifest UAC asInvoker
+- P5-3 : Check mise à jour (GitHub releases API, notification discrète)
+
+#### Phase 6 — Enterprise : 90 → 95/100 (1-2 semaines)
+- P6-1 : Chiffrement DB (SQLCipher / AES-256)
+- P6-2 : Journal d'audit (qui cherche quoi, export CSV)
+- P6-3 : Multi-utilisateur (index partagé NAS, token par user)
+
+---
+
+### État du projet après cette session
+
+| Composant | État |
+|-----------|------|
+| Build Linux | OK |
+| Build Windows natif (.exe) | OK —  |
+| Tests go test ./... | OK — tous packages |
+| Version dans binaire | OK — injectée via ldflags |
+| /health retourne version | OK |
+| Exclusions système Windows | OK — 10 répertoires |
+| GitHub release v1.0.0 | OK — https://github.com/UFO2025-dev/filesearch/releases/tag/v1.0.0 |
+| Score audit CTO | 44/100 mesuré sur code réel |
+| Feuille de route 90/100 | 28 todos SQL avec dépendances |
+| Prochaine étape | Phase 1 — P1-1 chemins absolus |
+
+---
