@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -42,9 +43,10 @@ func waitForServer(url string, timeout time.Duration) bool {
 }
 
 // isFileSearchRunning checks if a FileSearch instance is already on the port.
-// Returns true only if /health responds with our signature.
+// Returns true only if /health responds with {"app":"filesearch",...} to avoid
+// false positives when another service occupies the port.
 func isFileSearchRunning(baseURL string) bool {
-	client := &http.Client{Timeout: 1 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(baseURL + "/health")
 	if err != nil {
 		return false
@@ -53,9 +55,12 @@ func isFileSearchRunning(baseURL string) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	// Check content-type is JSON (our /health returns JSON)
-	ct := resp.Header.Get("Content-Type")
-	return strings.Contains(ct, "application/json")
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(body), `"app":"filesearch"`) ||
+		strings.Contains(string(body), `"app": "filesearch"`)
 }
 
 // openBrowser opens the default browser at the given URL.
@@ -70,6 +75,23 @@ func openBrowser(url string) {
 		cmd = exec.Command("xdg-open", url)
 	}
 	_ = cmd.Start()
+}
+
+// showFatalError shows an error to the user even when compiled with -H windowsgui
+// (no console). On Windows it spawns a MessageBox via PowerShell. On other
+// platforms it writes to stderr (console is available there).
+func showFatalError(title, msg string) {
+	if runtime.GOOS == "windows" {
+		script := fmt.Sprintf(
+			`Add-Type -AssemblyName System.Windows.Forms; `+
+				`[System.Windows.Forms.MessageBox]::Show('%s', '%s', 0, 16) | Out-Null`,
+			strings.ReplaceAll(msg, "'", "''"),
+			strings.ReplaceAll(title, "'", "''"),
+		)
+		_ = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).Run()
+	} else {
+		fmt.Fprintf(os.Stderr, "[FileSearch] %s: %s\n", title, msg)
+	}
 }
 
 func main() {
@@ -103,8 +125,9 @@ func main() {
 	checkConn, err := http.Get(baseURL + "/health")
 	if err == nil {
 		checkConn.Body.Close()
+		msg := fmt.Sprintf("Port %s is occupied by another application.\nStop that app or use -port to choose a different port.", *addr)
 		slog.Error("port occupied by another application — cannot start", "addr", *addr)
-		fmt.Fprintf(os.Stderr, "\n[FileSearch] ERROR: Port %s is occupied by another application.\nStop that app or use -port to choose a different port.\n", *addr)
+		showFatalError("FileSearch — Cannot Start", msg)
 		os.Exit(1)
 	}
 
@@ -208,7 +231,7 @@ func main() {
 	// FIX 1: Wait for server readiness, then open browser (no race condition)
 	if !*noOpen {
 		go func() {
-			if waitForServer(baseURL+"/health", 10*time.Second) {
+			if waitForServer(baseURL+"/health", 15*time.Second) {
 				slog.Info("server ready, opening browser", "url", baseURL)
 				openBrowser(baseURL)
 			} else {

@@ -75,9 +75,9 @@ func (s *Server) effectiveMode() string {
 	}
 	return s.hwMode
 }
-// chain wraps a handler with rate-limiting and auth middleware.
+// chain wraps a handler with panic recovery, rate-limiting, and auth middleware.
 func (s *Server) chain(h http.Handler) http.Handler {
-	return s.rateLimitMiddleware(s.authMiddleware(h))
+	return s.recoveryMiddleware(s.rateLimitMiddleware(s.authMiddleware(h)))
 }
 
 // Run registers all routes and starts the HTTP server.
@@ -122,6 +122,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
+		"app":            "filesearch",
 		"status":         "ok",
 		"mode":           s.effectiveMode(),
 		"semantic_ready": semanticReady,
@@ -239,9 +240,11 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
+		// Use explorer.exe with the path as a direct argument — no shell involved,
+		// so special chars (&, |, ;, etc.) in filenames cannot be interpreted.
 		winPath := filepath.FromSlash(req.Path)
 		slog.Info("handleOpen: opening", "winPath", winPath)
-		cmd = exec.Command("cmd.exe", "/C", "start", "", winPath)
+		cmd = exec.Command("explorer.exe", winPath)
 	} else {
 		out, err := exec.CommandContext(r.Context(), "wslpath", "-w", req.Path).Output()
 		if err != nil {
@@ -250,7 +253,8 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		}
 		winPath := strings.TrimSpace(string(out))
 		slog.Info("handleOpen: opening", "winPath", winPath)
-		cmd = exec.Command("/mnt/c/Windows/System32/cmd.exe", "/C", "start", "", winPath)
+		// Pass path directly to explorer — no cmd.exe shell interpretation.
+		cmd = exec.Command("/mnt/c/Windows/System32/explorer.exe", winPath)
 	}
 	if err := cmd.Start(); err != nil {
 		slog.Error("handleOpen: start failed", "err", err)
