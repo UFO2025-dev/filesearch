@@ -10,6 +10,7 @@ const defaultMaxSize = 128
 
 type entry struct {
 	results []Result
+	total   int
 	exp     time.Time
 	prev    *entry
 	next    *entry
@@ -49,32 +50,33 @@ func New(maxSize int, ttl time.Duration) *Cache {
 }
 
 // Get returns cached results and true if found and not expired.
-func (c *Cache) Get(key string) ([]Result, bool) {
+func (c *Cache) Get(key string) ([]Result, int, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.items[key]
 	if !ok {
-		return nil, false
+		return nil, 0, false
 	}
 	if time.Now().After(e.exp) {
 		c.remove(e)
-		return nil, false
+		return nil, 0, false
 	}
 	c.moveToFront(e)
-	return e.results, true
+	return e.results, e.total, true
 }
 
 // Set stores results under key.
-func (c *Cache) Set(key string, results []Result) {
+func (c *Cache) Set(key string, results []Result, total int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.items[key]; ok {
 		e.results = results
+		e.total = total
 		e.exp = time.Now().Add(c.ttl)
 		c.moveToFront(e)
 		return
 	}
-	e := &entry{key: key, results: results, exp: time.Now().Add(c.ttl)}
+	e := &entry{key: key, results: results, total: total, exp: time.Now().Add(c.ttl)}
 	c.items[key] = e
 	c.pushFront(e)
 	c.size++

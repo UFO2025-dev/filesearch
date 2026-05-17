@@ -82,7 +82,8 @@ func (d *DB) migrate(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS files (
 			path      TEXT    PRIMARY KEY,
 			doc_rowid INTEGER NOT NULL,
-			hash      TEXT    NOT NULL DEFAULT ''
+			hash      TEXT    NOT NULL DEFAULT '',
+			mtime     INTEGER NOT NULL DEFAULT 0
 		)
 	`)
 	if err != nil {
@@ -97,6 +98,8 @@ func (d *DB) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("db migrate backfill: %w", err)
 	}
+	// Add mtime column if upgrading from old schema (ignore error = column already exists).
+	_, _ = d.conn.ExecContext(ctx, `ALTER TABLE files ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
@@ -109,7 +112,7 @@ func contentHash(content string) string {
 // Upsert inserts or replaces a document atomically.
 // If the content hash matches the stored hash the operation is a no-op (O(1)).
 // Delete + Insert use the stored rowid for O(1) FTS5 access.
-func (d *DB) Upsert(ctx context.Context, path, content string) error {
+func (d *DB) UpsertWithMtime(ctx context.Context, path, content string, mtime int64) error {
 	hash := contentHash(content)
 
 	tx, err := d.conn.BeginTx(ctx, nil)
@@ -156,13 +159,18 @@ func (d *DB) Upsert(ctx context.Context, path, content string) error {
 
 	// Upsert the files shadow row.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO files(path, doc_rowid, hash) VALUES (?, ?, ?)
-		ON CONFLICT(path) DO UPDATE SET doc_rowid = excluded.doc_rowid, hash = excluded.hash`,
-		path, newRowid, hash)
+		INSERT INTO files(path, doc_rowid, hash, mtime) VALUES (?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET doc_rowid = excluded.doc_rowid, hash = excluded.hash, mtime = excluded.mtime`,
+		path, newRowid, hash, mtime)
 	if err != nil {
 		return fmt.Errorf("db upsert files: %w", err)
 	}
 	return tx.Commit()
+}
+
+// Upsert indexes path with content, using mtime=0 (backward-compat shim).
+func (d *DB) Upsert(ctx context.Context, path, content string) error {
+	return d.UpsertWithMtime(ctx, path, content, 0)
 }
 
 // Delete removes a document from the index by path using O(1) rowid lookup.
@@ -284,11 +292,11 @@ func filterClauses(f SearchFilter) (extClause, sinceClause, extParam string) {
 	}
 	switch f.Since {
 	case "today":
-		sinceClause = " AND mtime >= strftime('%s', 'now', '-1 day')"
+		sinceClause = " AND documents.path IN (SELECT path FROM files WHERE mtime >= strftime('%s', 'now', '-1 day'))"
 	case "week":
-		sinceClause = " AND mtime >= strftime('%s', 'now', '-7 days')"
+		sinceClause = " AND documents.path IN (SELECT path FROM files WHERE mtime >= strftime('%s', 'now', '-7 days'))"
 	case "month":
-		sinceClause = " AND mtime >= strftime('%s', 'now', '-30 days')"
+		sinceClause = " AND documents.path IN (SELECT path FROM files WHERE mtime >= strftime('%s', 'now', '-30 days'))"
 	}
 	return
 }
@@ -306,6 +314,11 @@ func (d *DB) Ping(ctx context.Context) error {
 }
 
 // Close closes the underlying connection.
+// Checkpoint flushes the WAL to the main database file, reducing corruption risk on hard kills.
+func (d *DB) Checkpoint() {
+	_, _ = d.conn.ExecContext(context.Background(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+}
+
 func (d *DB) Close() error {
 	return d.conn.Close()
 }

@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"gatewatch/file_search/internal/db"
+
+	"github.com/ledongthuc/pdf"
 )
 
 const (
@@ -244,7 +246,7 @@ func IndexFile(ctx context.Context, database *db.DB, path string) error {
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
-	return database.Upsert(ctx, path, content)
+	return database.UpsertWithMtime(ctx, path, content, info.ModTime().Unix())
 }
 
 func extractText(ctx context.Context, path string) (string, error) {
@@ -293,23 +295,39 @@ func extractRaw(path string) (string, error) {
 // ── PDF ────────────────────────────────────────────────────────────────────
 
 func extractPDF(ctx context.Context, path string) (string, error) {
+	// Try pdftotext first (higher quality, available on Linux with poppler-utils).
 	pdfOnce.Do(func() {
 		_, err := exec.LookPath("pdftotext")
 		pdfAvailable = err == nil
-		if !pdfAvailable {
-			slog.Warn("pdftotext not found — PDF files will be skipped", "hint", "install poppler-utils")
-		}
 	})
-	if !pdfAvailable {
-		return "", nil
+	if pdfAvailable {
+		var out bytes.Buffer
+		cmd := exec.CommandContext(ctx, "pdftotext", "-enc", "UTF-8", path, "-")
+		cmd.Stdout = &out
+		if err := cmd.Run(); err == nil {
+			return out.String(), nil
+		}
 	}
-	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, "pdftotext", "-enc", "UTF-8", path, "-")
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("pdftotext: %w", err)
+	// Pure Go fallback — works on Windows and any OS without poppler.
+	return extractPDFGo(path)
+}
+
+// extractPDFGo extracts plain text from a PDF using pure Go (no external tools).
+func extractPDFGo(path string) (string, error) {
+	f, r, err := pdf.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("pdf open: %w", err)
 	}
-	return out.String(), nil
+	defer f.Close()
+	var buf strings.Builder
+	for i := 1; i <= r.NumPage(); i++ {
+		if p := r.Page(i); !p.V.IsNull() {
+			if text, err := p.GetPlainText(nil); err == nil {
+				buf.WriteString(text)
+			}
+		}
+	}
+	return buf.String(), nil
 }
 
 // ── Markdown ───────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"path/filepath"
 	"strings"
@@ -155,9 +157,10 @@ func main() {
 	hwProfile := hardware.Detect()
 	hwProfile.Log()
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
-	if err := os.MkdirAll("data", 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o755); err != nil {
 		slog.Error("failed to create data dir", "err", err)
 		os.Exit(1)
 	}
@@ -261,7 +264,22 @@ func main() {
 		}()
 	}
 
-	if err := srv.Run(); err != nil {
+	// Graceful shutdown: wait for OS signal then shutdown cleanly.
+	go func() {
+		<-ctx.Done()
+		slog.Info("shutdown: signal received")
+		sdCtx, sdCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer sdCancel()
+		if err := srv.Shutdown(sdCtx); err != nil {
+			slog.Error("shutdown: server error", "err", err)
+		}
+		if database != nil {
+			database.Checkpoint()
+			_ = database.Close()
+		}
+	}()
+
+	if err := srv.Run(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server error", "err", err)
 	}
 }

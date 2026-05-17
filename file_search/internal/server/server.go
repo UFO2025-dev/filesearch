@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"os"
@@ -41,6 +42,7 @@ type Server struct {
 	modeOverride    string
 	dirChangeCh     chan string
 	cfgMgr          *appcfg.Manager
+	httpSrv         *http.Server
 }
 
 // New creates a new Server. database and emb may be nil for graceful degradation.
@@ -111,8 +113,22 @@ func (s *Server) Run() error {
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+	s.mu.Lock()
+	s.httpSrv = srv
+	s.mu.Unlock()
 	slog.Info("listening", "addr", s.addr)
 	return srv.ListenAndServe()
+}
+
+// Shutdown gracefully stops the HTTP server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	h := s.httpSrv
+	s.mu.Unlock()
+	if h == nil {
+		return nil
+	}
+	return h.Shutdown(ctx)
 }
 
 // handleHealth returns service liveness and readiness information.
@@ -156,17 +172,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if s.db != nil && q != "" {
 		// Check cache first.
 		if s.cache != nil {
-			if cached, ok := s.cache.Get(cacheKey); ok {
+			if cached, cachedTotal, ok := s.cache.Get(cacheKey); ok {
 				cacheResults := make([]db.Result, len(cached))
 				for i, cr := range cached {
 					cacheResults[i] = db.Result{Path: cr.Path, Snippet: cr.Snippet}
 				}
-				// Serve from cache (total/pages not cached â€” use len as approximation)
+				cachedPages := (cachedTotal + pageSize - 1) / pageSize
+				if cachedPages < 1 {
+					cachedPages = 1
+				}
 				writeJSON(w, map[string]any{
 					"results": cacheResults,
-					"total":   len(cached),
+					"total":   cachedTotal,
 					"page":    page,
-					"pages":   1,
+					"pages":   cachedPages,
 					"cached":  true,
 				})
 				return
@@ -191,7 +210,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			for i, res := range results {
 				cacheItems[i] = cache.Result{Path: res.Path, Snippet: res.Snippet}
 			}
-			s.cache.Set(cacheKey, cacheItems)
+			s.cache.Set(cacheKey, cacheItems, total)
 		}
 	}
 	if results == nil {

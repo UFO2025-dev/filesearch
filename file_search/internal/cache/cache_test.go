@@ -7,9 +7,9 @@ import (
 
 func TestGetSetBasic(t *testing.T) {
 	c := New(10, time.Minute)
-	c.Set("key1", []Result{{Path: "a.txt", Snippet: "hello world"}})
+	c.Set("key1", []Result{{Path: "a.txt", Snippet: "hello world"}}, 5)
 
-	results, ok := c.Get("key1")
+	results, _, ok := c.Get("key1")
 	if !ok {
 		t.Fatal("expected cache hit")
 	}
@@ -20,7 +20,7 @@ func TestGetSetBasic(t *testing.T) {
 
 func TestMiss(t *testing.T) {
 	c := New(10, time.Minute)
-	_, ok := c.Get("nonexistent")
+	_, _, ok := c.Get("nonexistent")
 	if ok {
 		t.Error("expected cache miss, got hit")
 	}
@@ -28,16 +28,16 @@ func TestMiss(t *testing.T) {
 
 func TestTTLExpiry(t *testing.T) {
 	c := New(10, 50*time.Millisecond)
-	c.Set("ttl_key", []Result{{Path: "b.txt"}})
+	c.Set("ttl_key", []Result{{Path: "b.txt"}}, 5)
 
-	_, ok := c.Get("ttl_key")
+	_, _, ok := c.Get("ttl_key")
 	if !ok {
 		t.Fatal("expected hit before expiry")
 	}
 
 	time.Sleep(60 * time.Millisecond)
 
-	_, ok = c.Get("ttl_key")
+	_, _, ok = c.Get("ttl_key")
 	if ok {
 		t.Error("expected miss after TTL, got hit")
 	}
@@ -45,22 +45,22 @@ func TestTTLExpiry(t *testing.T) {
 
 func TestEviction(t *testing.T) {
 	c := New(3, time.Minute) // max 3 entries
-	c.Set("a", []Result{{Path: "a"}})
-	c.Set("b", []Result{{Path: "b"}})
-	c.Set("c", []Result{{Path: "c"}})
+	c.Set("a", []Result{{Path: "a"}}, 5)
+	c.Set("b", []Result{{Path: "b"}}, 5)
+	c.Set("c", []Result{{Path: "c"}}, 5)
 	// Accessing "a" makes it the most recent.
 	c.Get("a")
 	// Adding "d" should evict the LRU which is "b".
-	c.Set("d", []Result{{Path: "d"}})
+	c.Set("d", []Result{{Path: "d"}}, 5)
 
 	if c.size != 3 {
 		t.Errorf("expected size 3, got %d", c.size)
 	}
-	_, ok := c.Get("b")
+	_, _, ok := c.Get("b")
 	if ok {
 		t.Error("expected 'b' to be evicted (LRU), but it was still cached")
 	}
-	_, ok = c.Get("a")
+	_, _, ok = c.Get("a")
 	if !ok {
 		t.Error("expected 'a' to still be cached (recently accessed)")
 	}
@@ -68,10 +68,10 @@ func TestEviction(t *testing.T) {
 
 func TestFlush(t *testing.T) {
 	c := New(10, time.Minute)
-	c.Set("x", []Result{{Path: "x.txt"}})
+	c.Set("x", []Result{{Path: "x.txt"}}, 5)
 	c.Flush()
 
-	_, ok := c.Get("x")
+	_, _, ok := c.Get("x")
 	if ok {
 		t.Error("expected empty cache after Flush")
 	}
@@ -87,7 +87,7 @@ func TestConcurrentAccess(t *testing.T) {
 	// Writer goroutine
 	go func() {
 		for i := 0; i < 1000; i++ {
-			c.Set("key", []Result{{Path: "concurrent.txt"}})
+			c.Set("key", []Result{{Path: "concurrent.txt"}}, 5)
 		}
 		close(done)
 	}()
@@ -104,20 +104,20 @@ func TestInvalidateByPath(t *testing.T) {
 	c.Set("search:invoice", []Result{
 		{Path: "/docs/invoice.pdf", Snippet: "invoice text"},
 		{Path: "/docs/other.txt",  Snippet: "unrelated"},
-	})
+	}, 5)
 	c.Set("search:report", []Result{
 		{Path: "/docs/report.txt", Snippet: "report content"},
-	})
+	}, 5)
 
 	c.InvalidateByPath("/docs/invoice.pdf")
 
 	// Key containing the invalidated path must be gone
-	_, ok := c.Get("search:invoice")
+	_, _, ok := c.Get("search:invoice")
 	if ok {
 		t.Error("expected 'search:invoice' to be invalidated, but it was still cached")
 	}
 	// Unrelated key must survive
-	_, ok = c.Get("search:report")
+	_, _, ok = c.Get("search:report")
 	if !ok {
 		t.Error("expected 'search:report' to still be cached after unrelated invalidation")
 	}
