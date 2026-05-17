@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -111,6 +112,20 @@ func main() {
 	token   := flag.String("token", "", "optional Bearer auth token")
 	noOpen  := flag.Bool("no-browser", false, "do not open browser on startup")
 	flag.Parse()
+
+	// Resolve relative DB/config paths relative to the executable directory.
+	// This prevents "data/" being created in the user's CWD on double-click.
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		if !filepath.IsAbs(*dbPath) {
+			abs := filepath.Join(exeDir, *dbPath)
+			dbPath = &abs
+		}
+		if !filepath.IsAbs(*cfgPath) {
+			abs := filepath.Join(exeDir, *cfgPath)
+			cfgPath = &abs
+		}
+	}
 
 	logger.Init(*jsonLog)
 

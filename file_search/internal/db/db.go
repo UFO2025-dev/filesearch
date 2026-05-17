@@ -228,13 +228,19 @@ func (d *DB) Search(ctx context.Context, query string, limit, offset int, f Sear
 		return nil, fmt.Errorf("invalid query: %w", err)
 	}
 
-	extClause, sinceClause := filterClauses(f)
+	extClause, sinceClause, extParam := filterClauses(f)
 	q := `SELECT path, snippet(documents, 1, '[', ']', '...', 15)
 		 FROM documents
 		 WHERE documents MATCH ?` + extClause + sinceClause + `
 		 ORDER BY rank
 		 LIMIT ? OFFSET ?`
-	rows, err := d.conn.QueryContext(ctx, q, safe, limit, offset)
+	var qArgs []any
+	qArgs = append(qArgs, safe)
+	if extParam != "" {
+		qArgs = append(qArgs, extParam)
+	}
+	qArgs = append(qArgs, limit, offset)
+	rows, err := d.conn.QueryContext(ctx, q, qArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("db search: %w", err)
 	}
@@ -257,18 +263,24 @@ func (d *DB) Count(ctx context.Context, query string, f SearchFilter) (int, erro
 	if err != nil {
 		return 0, fmt.Errorf("invalid query: %w", err)
 	}
-	extClause, sinceClause := filterClauses(f)
+	extClause, sinceClause, extParam := filterClauses(f)
 	var n int
+	var cArgs []any
+	cArgs = append(cArgs, safe)
+	if extParam != "" {
+		cArgs = append(cArgs, extParam)
+	}
 	err = d.conn.QueryRowContext(ctx,
-		`SELECT count(*) FROM documents WHERE documents MATCH ?`+extClause+sinceClause, safe,
+		`SELECT count(*) FROM documents WHERE documents MATCH ?`+extClause+sinceClause, cArgs...,
 	).Scan(&n)
 	return n, err
 }
 
 // filterClauses returns SQL AND clauses for ext and date filters.
-func filterClauses(f SearchFilter) (extClause, sinceClause string) {
+func filterClauses(f SearchFilter) (extClause, sinceClause, extParam string) {
 	if f.Ext != "" {
-		extClause = fmt.Sprintf(" AND path LIKE '%%%s'", f.Ext)
+		extClause = " AND path LIKE ?"
+		extParam = "%" + f.Ext
 	}
 	switch f.Since {
 	case "today":

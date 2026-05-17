@@ -230,7 +230,7 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			cleanRoot := filepath.Clean(root)
-			if cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+"/") {
+			if cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator)) {
 				allowed = true
 				break
 			}
