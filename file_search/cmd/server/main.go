@@ -193,6 +193,31 @@ func main() {
 		slog.Warn("embedder: failed to create vector table", "err", err)
 	}
 
+	// Integrity check at startup — warn but don't exit (user might still search).
+	if err := database.IntegrityCheck(ctx); err != nil {
+		slog.Error("database integrity check failed — DB may be corrupt", "err", err)
+	} else {
+		slog.Info("database integrity check passed")
+	}
+
+	// Periodic FTS5 OPTIMIZE every 24 hours.
+	go func() {
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				if err := database.Optimize(context.Background()); err != nil {
+					slog.Warn("fts5 optimize failed", "err", err)
+				} else {
+					slog.Info("fts5 optimize completed")
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	embClient := embedder.New("", "")
 	searchCache := cache.New(128, 30*time.Second)
 

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -79,9 +80,9 @@ func (s *Server) effectiveMode() string {
 	}
 	return s.hwMode
 }
-// chain wraps a handler with panic recovery, rate-limiting, and auth middleware.
+// chain wraps a handler with panic recovery, CSRF, rate-limiting, and auth middleware.
 func (s *Server) chain(h http.Handler) http.Handler {
-	return s.recoveryMiddleware(s.rateLimitMiddleware(s.authMiddleware(h)))
+	return s.recoveryMiddleware(s.csrfMiddleware(s.rateLimitMiddleware(s.authMiddleware(h))))
 }
 
 // Run registers all routes and starts the HTTP server.
@@ -334,12 +335,8 @@ func (s *Server) handleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 			hits = append(hits, result{Path: path, Score: score})
 		}
 	}
-	// Sort descending by score.
-	for i := 1; i < len(hits); i++ {
-		for j := i; j > 0 && hits[j].Score > hits[j-1].Score; j-- {
-			hits[j], hits[j-1] = hits[j-1], hits[j]
-		}
-	}
+	// Sort descending by score — O(n log n).
+	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	if len(hits) > 10 {
 		hits = hits[:10]
 	}

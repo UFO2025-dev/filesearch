@@ -117,6 +117,59 @@ func (srv *Server) recoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+
+// csrfMiddleware rejects cross-origin POST requests to mutable API endpoints.
+// A browser sending a cross-site request will have an Origin that does not match
+// the server host; same-origin requests from the embedded UI will match.
+// Requests without Origin (e.g., curl, desktop apps) are allowed when Referer
+// is also absent, which is the normal pattern for direct API clients.
+func (srv *Server) csrfMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			origin := r.Header.Get("Origin")
+			referer := r.Header.Get("Referer")
+			// Allow: no origin and no referer (direct API call / curl).
+			if origin == "" && referer == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Extract host from server address (strip leading colon if bare port).
+			serverHost := r.Host
+			if serverHost == "" {
+				serverHost = "localhost" + srv.addr
+			}
+			allowed := []string{
+				"http://" + serverHost,
+				"https://" + serverHost,
+			}
+			check := origin
+			if check == "" {
+				// Trim referer to origin (scheme + host).
+				// Skip past "http://" or "https://" prefix (7-8 chars) then find next slash.
+				pathStart := strings.Index(referer, "://")
+				if pathStart >= 0 {
+					rest := referer[pathStart+3:]
+					if slashIdx := strings.IndexByte(rest, '/'); slashIdx >= 0 {
+						check = referer[:pathStart+3+slashIdx]
+					} else {
+						check = referer
+					}
+				} else {
+					check = referer
+				}
+			}
+			for _, a := range allowed {
+				if strings.EqualFold(check, a) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			writeError(w, "forbidden: cross-origin request", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 // rateLimitMiddleware rejects requests from IPs exceeding ratePerSecond req/s.
 // Applied to API endpoints only (/search, /open, /health).
 func (srv *Server) rateLimitMiddleware(next http.Handler) http.Handler {

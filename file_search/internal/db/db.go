@@ -318,6 +318,20 @@ func (d *DB) Ping(ctx context.Context) error {
 func (d *DB) Checkpoint() {
 	_, _ = d.conn.ExecContext(context.Background(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 }
+// IntegrityCheck runs PRAGMA integrity_check and returns an error if the DB is corrupt.
+func (d *DB) IntegrityCheck(ctx context.Context) error {
+	row := d.conn.QueryRowContext(ctx, `PRAGMA integrity_check`)
+	var result string
+	if err := row.Scan(&result); err != nil {
+		return fmt.Errorf("integrity_check query: %w", err)
+	}
+	if result != "ok" {
+		return fmt.Errorf("database integrity check failed: %s", result)
+	}
+	return nil
+}
+
+
 
 func (d *DB) Close() error {
 	return d.conn.Close()
