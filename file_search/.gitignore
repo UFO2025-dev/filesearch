@@ -1,0 +1,28 @@
+# Tauri / Rust / Node
+node_modules/
+src-tauri/target/
+src-tauri/binaries/
+
+# Compiled binaries
+filesearch-server
+server
+
+# Runtime data (DB, logs, config)
+data/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Go build cache
+*.test
+*.out
+
+# Misc project files
+critique-ai
+resume
+regle_file_search
+file_cherche.md
+roadmap_filesearch.md

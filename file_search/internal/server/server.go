@@ -3,15 +3,20 @@ package server
 import (
 	"embed"
 	"encoding/json"
+	"os"
+	"sync"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os/exec"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"gatewatch/file_search/internal/cache"
+	appcfg "gatewatch/file_search/internal/config"
 	"gatewatch/file_search/internal/db"
 	"gatewatch/file_search/internal/embedder"
 )
@@ -28,10 +33,16 @@ type Server struct {
 	db             *db.DB
 	embedderClient *embedder.Client
 	indexedRoots   []string
+	cache          *cache.Cache
+	dbPath          string
+	mu             sync.Mutex
+	modeOverride    string
+	dirChangeCh     chan string
+	cfgMgr          *appcfg.Manager
 }
 
 // New creates a new Server. database and emb may be nil for graceful degradation.
-func New(addr, hwMode string, database *db.DB, emb *embedder.Client, roots []string, token string) *Server {
+func New(addr, hwMode string, database *db.DB, emb *embedder.Client, roots []string, token string, c *cache.Cache) *Server {
 	return &Server{
 		addr:           addr,
 		hwMode:         hwMode,
@@ -40,9 +51,29 @@ func New(addr, hwMode string, database *db.DB, emb *embedder.Client, roots []str
 		db:             database,
 		embedderClient: emb,
 		indexedRoots:   roots,
+		cache:          c,
 	}
 }
 
+
+// SetDBPath sets the path to the SQLite database file (used for stats).
+func (s *Server) SetDBPath(path string) { s.dbPath = path }
+
+// SetDirChangeCh sets the channel used to signal a new directory to index.
+func (s *Server) SetDirChangeCh(ch chan string) { s.dirChangeCh = ch }
+
+// SetConfig wires the persistent config manager so settings changes are saved.
+func (s *Server) SetConfig(m *appcfg.Manager) { s.cfgMgr = m }
+
+// effectiveMode returns the active mode (override takes precedence over detected).
+func (s *Server) effectiveMode() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.modeOverride != "" {
+		return s.modeOverride
+	}
+	return s.hwMode
+}
 // chain wraps a handler with rate-limiting and auth middleware.
 func (s *Server) chain(h http.Handler) http.Handler {
 	return s.rateLimitMiddleware(s.authMiddleware(h))
@@ -67,6 +98,8 @@ func (s *Server) Run() error {
 	mux.Handle("POST /open", s.chain(http.HandlerFunc(s.handleOpen)))
 	mux.Handle("GET /api/search/semantic", s.chain(http.HandlerFunc(s.handleSemanticSearch)))
 	mux.Handle("GET /api/status", s.chain(http.HandlerFunc(s.handleStatus)))
+	mux.Handle("GET /api/config", s.chain(http.HandlerFunc(s.handleConfig)))
+	mux.Handle("POST /api/settings", s.chain(http.HandlerFunc(s.handleSettings)))
 
 	srv := &http.Server{
 		Addr:         s.addr,
@@ -89,12 +122,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"status":         "ok",
-		"mode":           s.hwMode,
+		"mode":           s.effectiveMode(),
 		"semantic_ready": semanticReady,
 	})
 }
 
-// handleSearch runs a paginated FTS5 keyword search.
+// handleSearch runs a paginated FTS5 keyword search with optional filters.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -104,20 +137,56 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	const pageSize = 10
 	offset := (page - 1) * pageSize
 
+	f := db.SearchFilter{
+		Ext:   r.URL.Query().Get("ext"),
+		Since: r.URL.Query().Get("since"),
+	}
+
+	// Cache key includes all query dimensions.
+	cacheKey := fmt.Sprintf("%s|%s|%s|%d", q, f.Ext, f.Since, page)
+
 	results := []db.Result{}
 	total := 0
 
 	if s.db != nil && q != "" {
+		// Check cache first.
+		if s.cache != nil {
+			if cached, ok := s.cache.Get(cacheKey); ok {
+				cacheResults := make([]db.Result, len(cached))
+				for i, cr := range cached {
+					cacheResults[i] = db.Result{Path: cr.Path, Snippet: cr.Snippet}
+				}
+				// Serve from cache (total/pages not cached — use len as approximation)
+				writeJSON(w, map[string]any{
+					"results": cacheResults,
+					"total":   len(cached),
+					"page":    page,
+					"pages":   1,
+					"cached":  true,
+				})
+				return
+			}
+		}
+
 		var err error
-		results, err = s.db.Search(r.Context(), q, pageSize, offset)
+		results, err = s.db.Search(r.Context(), q, pageSize, offset, f)
 		if err != nil {
 			writeError(w, "search failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		total, err = s.db.Count(r.Context(), q)
+		total, err = s.db.Count(r.Context(), q, f)
 		if err != nil {
 			writeError(w, "count failed: "+err.Error(), http.StatusInternalServerError)
 			return
+		}
+
+		// Store in cache.
+		if s.cache != nil && len(results) > 0 {
+			cacheItems := make([]cache.Result, len(results))
+			for i, res := range results {
+				cacheItems[i] = cache.Result{Path: res.Path, Snippet: res.Snippet}
+			}
+			s.cache.Set(cacheKey, cacheItems)
 		}
 	}
 	if results == nil {
@@ -147,16 +216,22 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Security: path must be under one of the indexed roots (if configured).
+	slog.Info("handleOpen", "path", req.Path, "roots", s.indexedRoots)
 	if len(s.indexedRoots) > 0 {
 		allowed := false
+		cleanPath := filepath.Clean(req.Path)
 		for _, root := range s.indexedRoots {
-			if root != "" && strings.HasPrefix(req.Path, root) {
+			if root == "" {
+				continue
+			}
+			cleanRoot := filepath.Clean(root)
+			if cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+"/") {
 				allowed = true
 				break
 			}
 		}
 		if !allowed {
-			writeError(w, "path not in indexed roots", http.StatusForbidden)
+			writeError(w, "path not in indexed roots: "+req.Path, http.StatusForbidden)
 			return
 		}
 	}
@@ -167,11 +242,15 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	winPath := strings.TrimSpace(string(out))
+	slog.Info("handleOpen: opening", "winPath", winPath)
 
-	if err := exec.CommandContext(r.Context(), "/mnt/c/Windows/System32/cmd.exe", "/C", "start", "", winPath).Run(); err != nil {
-		writeError(w, "start: "+err.Error(), http.StatusInternalServerError)
+	cmd := exec.Command("/mnt/c/Windows/System32/cmd.exe", "/C", "start", "", winPath)
+	if err := cmd.Start(); err != nil {
+		slog.Error("handleOpen: start failed", "err", err)
+		writeError(w, "open: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	slog.Info("handleOpen: success", "pid", cmd.Process.Pid)
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -210,6 +289,9 @@ func (s *Server) handleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	hits := make([]result, 0)
 	for path, vec := range allVectors {
+		if !strings.HasPrefix(path, "/") {
+			continue // skip relative paths stored by old indexer
+		}
 		if isLibraryPath(path) {
 			continue
 		}
@@ -230,6 +312,34 @@ func (s *Server) handleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"results": hits})
 }
 
+// handleConfig returns server configuration and stats.
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	embedded := 0
+	total := 0
+	if s.db != nil {
+		embedded, _ = s.db.VectorCount(r.Context())
+		paths, _ := s.db.AllPaths(r.Context())
+		total = len(paths)
+	}
+	var dbSizeBytes int64
+	if s.dbPath != "" {
+		if info, err := os.Stat(s.dbPath); err == nil {
+			dbSizeBytes = info.Size()
+		}
+	}
+	s.mu.Lock()
+	modeOverride := s.modeOverride
+	s.mu.Unlock()
+	writeJSON(w, map[string]any{
+		"mode":           s.effectiveMode(),
+		"mode_override":  modeOverride,
+		"indexed_roots":  s.indexedRoots,
+		"files_indexed":  total,
+		"files_embedded": embedded,
+		"db_size_bytes":  dbSizeBytes,
+	})
+}
+
 // handleStatus returns the semantic embedding progress.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var total, embedded int
@@ -248,6 +358,59 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"total":    total,
 		"percent":  percent,
 	})
+}
+
+// handleSettings updates server configuration at runtime.
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Dir          string `json:"dir"`
+		ModeOverride string `json:"mode_override"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	if req.ModeOverride == "auto" {
+		s.modeOverride = ""
+	} else if req.ModeOverride != "" {
+		s.modeOverride = req.ModeOverride
+	}
+	if req.Dir != "" {
+		found := false
+		for _, root := range s.indexedRoots {
+			if root == req.Dir {
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.indexedRoots = append(s.indexedRoots, req.Dir)
+		}
+	}
+	s.mu.Unlock()
+
+	// Persist changes to disk.
+	if s.cfgMgr != nil {
+		if req.Dir != "" {
+			_ = s.cfgMgr.AddDir(req.Dir)
+		}
+		if req.ModeOverride != "" {
+			mode := req.ModeOverride
+			if mode == "auto" {
+				mode = ""
+			}
+			_ = s.cfgMgr.SetModeOverride(mode)
+		}
+	}
+
+	if req.Dir != "" && s.dirChangeCh != nil {
+		select {
+		case s.dirChangeCh <- req.Dir:
+		default:
+		}
+	}
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
