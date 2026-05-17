@@ -1,0 +1,223 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"time"
+
+	"gatewatch/file_search/internal/cache"
+	appcfg "gatewatch/file_search/internal/config"
+	"gatewatch/file_search/internal/db"
+	"gatewatch/file_search/internal/embedder"
+	"gatewatch/file_search/internal/hardware"
+	"gatewatch/file_search/internal/indexer"
+	"gatewatch/file_search/internal/logger"
+	"gatewatch/file_search/internal/server"
+	"gatewatch/file_search/internal/watcher"
+)
+
+// waitForServer polls /health until the server responds or timeout is reached.
+// Returns true if server is ready.
+func waitForServer(url string, timeout time.Duration) bool {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return true
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
+// isFileSearchRunning checks if a FileSearch instance is already on the port.
+// Returns true only if /health responds with our signature.
+func isFileSearchRunning(baseURL string) bool {
+	client := &http.Client{Timeout: 1 * time.Second}
+	resp, err := client.Get(baseURL + "/health")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	// Check content-type is JSON (our /health returns JSON)
+	ct := resp.Header.Get("Content-Type")
+	return strings.Contains(ct, "application/json")
+}
+
+// openBrowser opens the default browser at the given URL.
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd.exe", "/C", "start", "", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	_ = cmd.Start()
+}
+
+func main() {
+	jsonLog := flag.Bool("json-log", false, "output logs as JSON")
+	// FIX 3: bind 127.0.0.1 by default — reduces firewall friction + attack surface
+	addr    := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
+	port    := flag.Int("port", 0, "listen port (overrides -addr)")
+	dir     := flag.String("dir", "", "directory to index (added to config)")
+	dbPath  := flag.String("db", "data/index.db", "SQLite database path")
+	cfgPath := flag.String("config", "data/config.json", "config file path")
+	token   := flag.String("token", "", "optional Bearer auth token")
+	noOpen  := flag.Bool("no-browser", false, "do not open browser on startup")
+	flag.Parse()
+
+	logger.Init(*jsonLog)
+
+	if *port != 0 {
+		*addr = fmt.Sprintf("127.0.0.1:%d", *port)
+	}
+
+	// FIX 2: Safe port collision — check if FileSearch already running
+	baseURL := "http://" + *addr
+	if isFileSearchRunning(baseURL) {
+		slog.Info("FileSearch already running, opening browser", "url", baseURL)
+		if !*noOpen {
+			openBrowser(baseURL)
+		}
+		return
+	}
+	// Check port occupied by something else
+	checkConn, err := http.Get(baseURL + "/health")
+	if err == nil {
+		checkConn.Body.Close()
+		slog.Error("port occupied by another application — cannot start", "addr", *addr)
+		fmt.Fprintf(os.Stderr, "\n[FileSearch] ERROR: Port %s is occupied by another application.\nStop that app or use -port to choose a different port.\n", *addr)
+		os.Exit(1)
+	}
+
+	hwProfile := hardware.Detect()
+	hwProfile.Log()
+
+	ctx := context.Background()
+
+	if err := os.MkdirAll("data", 0o755); err != nil {
+		slog.Error("failed to create data dir", "err", err)
+		os.Exit(1)
+	}
+
+	// ── Load persistent config ────────────────────────────────────────────
+	cfg, err := appcfg.Load(*cfgPath)
+	if err != nil {
+		slog.Warn("config: failed to load, using defaults", "err", err)
+		cfg, _ = appcfg.Load("")
+	}
+
+	if *dir != "" {
+		if err := cfg.AddDir(*dir); err != nil {
+			slog.Warn("config: failed to save new dir", "err", err)
+		}
+	}
+
+	snapshot := cfg.Get()
+	roots := snapshot.IndexedDirs
+
+	// ── Database ──────────────────────────────────────────────────────────
+	database, err := db.New(ctx, *dbPath)
+	if err != nil {
+		slog.Error("failed to open database", "err", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
+	if err := database.EnsureVectorTable(ctx); err != nil {
+		slog.Warn("embedder: failed to create vector table", "err", err)
+	}
+
+	embClient := embedder.New("", "")
+	searchCache := cache.New(128, 30*time.Second)
+
+	// ── Index all configured directories ─────────────────────────────────
+	for _, d := range roots {
+		d := d
+		go func() {
+			slog.Info("indexer: starting", "dir", d)
+			stats, err := indexer.Run(ctx, database, d)
+			if err != nil {
+				slog.Error("indexer: failed", "dir", d, "err", err)
+				return
+			}
+			slog.Info("indexer: done", "dir", d,
+				"indexed", stats.Indexed,
+				"skipped", stats.Skipped,
+				"errors", stats.Errors)
+		}()
+		go watcher.New(d, database, searchCache).Run(ctx)
+	}
+
+	go func() {
+		bgIndexer := embedder.NewBackgroundIndexer(embClient, database, database)
+		bgIndexer.Run(ctx, 30*time.Second)
+	}()
+
+	// ── HTTP server ───────────────────────────────────────────────────────
+	slog.Info("starting server", "addr", *addr)
+
+	initMode := hwProfile.Mode.String()
+	if snapshot.ModeOverride != "" {
+		initMode = snapshot.ModeOverride
+	}
+
+	srv := server.New(*addr, initMode, database, embClient, roots, *token, searchCache)
+	srv.SetDBPath(*dbPath)
+	srv.SetConfig(cfg)
+
+	dirChangeCh := make(chan string, 4)
+	srv.SetDirChangeCh(dirChangeCh)
+	go func() {
+		for {
+			select {
+			case newDir := <-dirChangeCh:
+				go func(d string) {
+					stats, err := indexer.Run(ctx, database, d)
+					if err != nil {
+						slog.Error("indexer: failed for new dir", "dir", d, "err", err)
+						return
+					}
+					slog.Info("indexer: done for new dir", "dir", d, "indexed", stats.Indexed)
+					go watcher.New(d, database, searchCache).Run(ctx)
+				}(newDir)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// FIX 1: Wait for server readiness, then open browser (no race condition)
+	if !*noOpen {
+		go func() {
+			if waitForServer(baseURL+"/health", 10*time.Second) {
+				slog.Info("server ready, opening browser", "url", baseURL)
+				openBrowser(baseURL)
+			} else {
+				slog.Warn("server did not become ready in time, skipping browser open")
+			}
+		}()
+	}
+
+	if err := srv.Run(); err != nil {
+		slog.Error("server error", "err", err)
+	}
+}

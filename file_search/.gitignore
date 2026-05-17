@@ -5,7 +5,7 @@ src-tauri/binaries/
 
 # Compiled binaries
 filesearch-server
-server
+/filesearch-server
 
 # Runtime data (DB, logs, config)
 data/

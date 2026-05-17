@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -83,14 +84,14 @@ func (s *Server) chain(h http.Handler) http.Handler {
 func (s *Server) Run() error {
 	mux := http.NewServeMux()
 
-	// Static UI — no auth, no rate limit.
+	// Static UI â€” no auth, no rate limit.
 	sub, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		return fmt.Errorf("embed static: %w", err)
 	}
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 
-	// Health — no auth (used by Docker health checks etc.).
+	// Health â€” no auth (used by Docker health checks etc.).
 	mux.HandleFunc("/health", s.handleHealth)
 
 	// Protected API routes.
@@ -156,7 +157,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 				for i, cr := range cached {
 					cacheResults[i] = db.Result{Path: cr.Path, Snippet: cr.Snippet}
 				}
-				// Serve from cache (total/pages not cached — use len as approximation)
+				// Serve from cache (total/pages not cached â€” use len as approximation)
 				writeJSON(w, map[string]any{
 					"results": cacheResults,
 					"total":   len(cached),
@@ -236,15 +237,21 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	out, err := exec.CommandContext(r.Context(), "wslpath", "-w", req.Path).Output()
-	if err != nil {
-		writeError(w, "wslpath: "+err.Error(), http.StatusInternalServerError)
-		return
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		winPath := filepath.FromSlash(req.Path)
+		slog.Info("handleOpen: opening", "winPath", winPath)
+		cmd = exec.Command("cmd.exe", "/C", "start", "", winPath)
+	} else {
+		out, err := exec.CommandContext(r.Context(), "wslpath", "-w", req.Path).Output()
+		if err != nil {
+			writeError(w, "wslpath: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		winPath := strings.TrimSpace(string(out))
+		slog.Info("handleOpen: opening", "winPath", winPath)
+		cmd = exec.Command("/mnt/c/Windows/System32/cmd.exe", "/C", "start", "", winPath)
 	}
-	winPath := strings.TrimSpace(string(out))
-	slog.Info("handleOpen: opening", "winPath", winPath)
-
-	cmd := exec.Command("/mnt/c/Windows/System32/cmd.exe", "/C", "start", "", winPath)
 	if err := cmd.Start(); err != nil {
 		slog.Error("handleOpen: start failed", "err", err)
 		writeError(w, "open: "+err.Error(), http.StatusInternalServerError)
