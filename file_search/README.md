@@ -1,8 +1,34 @@
 # FileSearch 🔍
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20WSL2-blue?logo=windows)](https://learn.microsoft.com/windows/wsl/)
+
 **Moteur de recherche local ultra-rapide pour vos fichiers** — propulsé par Go, SQLite FTS5 et la recherche sémantique IA (Ollama).
 
 > Trouvez n'importe quel fichier sur votre machine en moins d'une seconde, même par sens, pas seulement par mot-clé.
+
+---
+
+## 📸 Aperçu
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  🔍 FileSearch                          ⚙️ Paramètres        │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   ┌─────────────────────────────────────┐  [Rechercher]    │
+│   │  rapport budget 2025...             │                   │
+│   └─────────────────────────────────────┘                  │
+│    Filtre: [Tous ▼]  Depuis: [─────]   🧠 Sémantique ON    │
+│                                                             │
+│   📄 rapport_budget_2025.pdf          C:\Users\...  [Ouvrir]│
+│   📝 budget_notes.txt                 C:\Users\...  [Ouvrir]│
+│   📊 previsions_2025.xlsx             C:\Users\...  [Ouvrir]│
+│                                                             │
+│   ✅ 3 résultats en 12ms  |  535 fichiers indexés  |  🟡 Avancé │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -30,7 +56,7 @@
 - **Go 1.21+** dans WSL : `sudo apt install golang-go`
 - (Optionnel) **Ollama** pour la recherche sémantique : https://ollama.ai
 
-### Installation
+### Installation en 1 clic
 ```bat
 :: Depuis Windows, double-cliquez sur :
 file_search\scripts\install.bat
@@ -117,6 +143,12 @@ file_search/
 
 ---
 
+## 🤝 Contribuer
+
+Les contributions sont les bienvenues ! Voir [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
 ## 📄 Licence
 
-MIT — Youssef, 2024-2026
+[MIT](LICENSE) — Youssef (UFO2025-dev), 2026
