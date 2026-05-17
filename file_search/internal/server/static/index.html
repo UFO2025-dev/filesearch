@@ -103,6 +103,7 @@
       <button class="tab active" data-mode="classic">&#x26A1; Classique</button>
       <button class="tab" data-mode="semantic">&#x1F9E0; S&#xE9;mantique</button>
       <button class="tab" data-mode="settings">&#x2699;&#xFE0F; Param&#xE8;tres</button>
+      <button class="tab" data-mode="audit">&#x1F4CB; Historique</button>
     </div>
     <div id="filters-bar" class="filters-bar">
       <select id="filter-ext">
@@ -135,6 +136,27 @@
       <button class="onboarding-btn" id="onboarding-add-btn">&#x1F4C1; Ajouter un dossier</button>
     </div>
     <div id="spinner" class="spinner hidden"></div>
+    <div id="audit-panel" class="panel hidden">
+      <div class="settings-section">
+        <h3>&#x1F4CB; Historique des recherches</h3>
+        <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem">Les 100 derni&#xE8;res recherches effectu&#xE9;es sur ce poste.</p>
+        <button id="audit-export-btn" style="margin-bottom:1rem">&#x2B07; Exporter CSV (Excel)</button>
+        <div id="audit-table-wrap" style="overflow-x:auto">
+          <table id="audit-table" style="width:100%;border-collapse:collapse;font-size:.85rem">
+            <thead>
+              <tr style="border-bottom:2px solid var(--border)">
+                <th style="text-align:left;padding:.4rem .6rem">Date</th>
+                <th style="text-align:left;padding:.4rem .6rem">Requ&#xEA;te</th>
+                <th style="text-align:left;padding:.4rem .6rem">Mode</th>
+                <th style="text-align:right;padding:.4rem .6rem">R&#xE9;sultats</th>
+              </tr>
+            </thead>
+            <tbody id="audit-tbody"></tbody>
+          </table>
+          <p id="audit-empty" style="color:var(--muted);text-align:center;padding:2rem;display:none">Aucune recherche enregistr&#xE9;e.</p>
+        </div>
+      </div>
+    </div>
     <div id="results" class="results"></div>
     <div id="pagination" class="pagination"></div>
     <div id="settings-panel" class="settings-panel">
@@ -248,8 +270,13 @@
         currentPage = 1;
         if (currentMode === 'settings') {
           showSettings();
+          hideAudit();
+        } else if (currentMode === 'audit') {
+          hideSettings();
+          showAudit();
         } else {
           hideSettings();
+          hideAudit();
           const q = $('query').value.trim();
           if (q) performSearch(q);
         }
@@ -392,6 +419,51 @@
     }
     function hideSettings() {
       $('settings-panel').classList.remove('visible');
+    }
+    function hideAudit() {
+      const p = $('audit-panel');
+      if (p) p.classList.add('hidden');
+    }
+    let auditWired = false;
+    async function showAudit() {
+      const p = $('audit-panel');
+      if (!p) return;
+      p.classList.remove('hidden');
+      $('results').innerHTML = '';
+      $('pagination').innerHTML = '';
+      if (!auditWired) {
+        auditWired = true;
+        $('audit-export-btn').addEventListener('click', () => {
+          window.location.href = '/api/audit/export';
+        });
+      }
+      try {
+        const res = await fetch('/api/audit');
+        if (!res.ok) return;
+        const data = await res.json();
+        const entries = data.entries || [];
+        const tbody = $('audit-tbody');
+        const empty = $('audit-empty');
+        tbody.innerHTML = '';
+        if (entries.length === 0) {
+          empty.style.display = '';
+          return;
+        }
+        empty.style.display = 'none';
+        entries.forEach(e => {
+          const tr = document.createElement('tr');
+          tr.style.borderBottom = '1px solid var(--border)';
+          const dt = e.searched_at ? e.searched_at.replace('T', ' ').substring(0, 16) : '';
+          const modeColor = e.mode === 'semantic' ? '#a78bfa' : 'var(--accent)';
+          tr.innerHTML = `<td style="padding:.35rem .6rem;color:var(--muted)">${dt}</td>` +
+            `<td style="padding:.35rem .6rem;font-weight:500">${esc(e.query)}</td>` +
+            `<td style="padding:.35rem .6rem"><span style="color:${modeColor}">${esc(e.mode)}</span></td>` +
+            `<td style="padding:.35rem .6rem;text-align:right">${e.results_n}</td>`;
+          tbody.appendChild(tr);
+        });
+      } catch(err) {
+        console.error('audit load error', err);
+      }
     }
 
     async function loadSettings() {

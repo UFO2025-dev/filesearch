@@ -100,6 +100,9 @@ func (d *DB) migrate(ctx context.Context) error {
 	}
 	// Add mtime column if upgrading from old schema (ignore error = column already exists).
 	_, _ = d.conn.ExecContext(ctx, `ALTER TABLE files ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0`)
+	if err := d.EnsureAuditTable(ctx); err != nil {
+		return fmt.Errorf("db migrate audit: %w", err)
+	}
 	return nil
 }
 

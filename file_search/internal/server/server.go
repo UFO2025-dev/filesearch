@@ -122,6 +122,8 @@ func (s *Server) Run() error {
 	mux.Handle("GET /search", s.chain(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("POST /open", s.chain(http.HandlerFunc(s.handleOpen)))
 	mux.Handle("GET /api/search/semantic", s.chain(http.HandlerFunc(s.handleSemanticSearch)))
+	mux.Handle("GET /api/audit", s.chain(http.HandlerFunc(s.handleAudit)))
+	mux.Handle("GET /api/audit/export", s.chain(http.HandlerFunc(s.handleAuditExport)))
 	mux.Handle("GET /api/status", s.chain(http.HandlerFunc(s.handleStatus)))
 	mux.Handle("GET /api/config", s.chain(http.HandlerFunc(s.handleConfig)))
 	mux.Handle("POST /api/settings", s.chain(http.HandlerFunc(s.handleSettings)))
@@ -250,6 +252,45 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		"page":    page,
 		"pages":   pages,
 	})
+	if s.db != nil && q != "" {
+		go func() {
+			_ = s.db.LogSearch(context.Background(), q, "classic", total, 0)
+		}()
+	}
+}
+
+// handleAudit returns the last 100 audit log entries as JSON.
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeJSON(w, map[string]any{"entries": []any{}})
+		return
+	}
+	entries, err := s.db.AuditLog(r.Context(), 100)
+	if err != nil {
+		writeError(w, "audit log failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if entries == nil {
+		entries = []db.AuditEntry{}
+	}
+	writeJSON(w, map[string]any{"entries": entries})
+}
+
+// handleAuditExport streams the full audit log as a UTF-8 CSV file (Excel-ready).
+func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, "no database", http.StatusServiceUnavailable)
+		return
+	}
+	csv, err := s.db.AuditCSV(r.Context())
+	if err != nil {
+		writeError(w, "audit export failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	filename := "audit_" + time.Now().Format("2006-01-02") + ".csv"
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	_, _ = w.Write([]byte(csv))
 }
 
 // handleOpen converts a WSL path to a Windows path and opens it with Explorer.
@@ -362,6 +403,11 @@ func (s *Server) handleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 		hits = hits[:10]
 	}
 	writeJSON(w, map[string]any{"results": hits})
+	if q != "" {
+		go func() {
+			_ = s.db.LogSearch(context.Background(), q, "semantic", len(hits), 0)
+		}()
+	}
 }
 
 // handleConfig returns server configuration and stats.
