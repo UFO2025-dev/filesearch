@@ -1264,3 +1264,142 @@ Un utilisateur qui indexe C:\ ne sature plus son index avec des binaires systèm
 | Prochaine étape | Phase 1 — P1-1 chemins absolus |
 
 ---
+
+---
+
+## Session 2026-05-17 — P3 UX (debounce, onboarding, progress, erreurs) + P5 update-check
+
+### Résumé de la session
+
+Session entièrement consacrée à la finalisation des **5 todos P3/P5** identifiés lors de l'audit CTO (score 44/100 → objectif 90/100). Build vérifié, tests verts, push GitHub effectué.
+
+---
+
+### 1. P3 — Debounce + AbortController (`index.html`)
+
+**Problème :** La recherche envoyait une requête à chaque frappe sans annuler les requêtes précédentes, provoquant des réponses dans le désordre.
+
+**Solution :**
+- Variable `currentAbort` (AbortController) partagée entre `searchClassic` et `searchSemantic`
+- À chaque invocation : `currentAbort.abort()` puis `currentAbort = new AbortController()`
+- Signal passé au `fetch()` — la réponse arrivée hors-ordre est silencieusement ignorée (AbortError)
+- Debounce maintenu à 300 ms
+
+---
+
+### 2. P3 — Messages d'erreur humains (`index.html`)
+
+**Problème :** L'UI affichait des messages techniques (codes HTTP bruts) incompréhensibles pour les utilisateurs non-techniques (avocats, médecins).
+
+**Solution :** `showError()` accepte maintenant du HTML brut (chaînes contrôlées hardcodées) et affiche des messages adaptés par type :
+
+| Code | Message affiché |
+|------|-----------------|
+| 429 | "Trop de requêtes — attendez un instant" |
+| 503 | "Service indisponible — l'index est peut-être en cours de construction" |
+| Network error | "Impossible de contacter le serveur — est-il démarré ?" |
+| AbortError | (silencieux — requête annulée normalement) |
+
+---
+
+### 3. P3 — Onboarding état vide (`index.html`)
+
+**Problème :** Au premier lancement (aucun dossier indexé), l'UI affichait une page blanche sans indication sur quoi faire.
+
+**Solution :**
+- Nouveau div `#onboarding` avec message d'accueil + bouton CTA "➕ Ajouter un dossier"
+- Fonction `checkIndexState()` — interroge `/api/config`, lit `files_indexed` et `indexing`
+- Si `files_indexed === 0` et `!indexing` → affiche `#onboarding`, masque barre de recherche
+- Bouton CTA : bascule sur l'onglet Paramètres et focus sur le champ répertoire
+
+---
+
+### 4. P3 — Barre de progression d'indexation (`index.html` + `server.go` + `main.go`)
+
+**Problème :** Pendant l'indexation (qui peut durer plusieurs minutes sur un gros disque), l'UI ne donnait aucun feedback.
+
+**Solution :**
+- `server.go` : champ `indexing int32` (compteur atomique) ajouté au struct `Server`
+  - `SetIndexing(true)` → `atomic.AddInt32(&s.indexing, +1)`
+  - `SetIndexing(false)` → `atomic.AddInt32(&s.indexing, -1)`
+  - Plusieurs dossiers peuvent s'indexer en parallèle — compteur, pas booléen
+  - `/api/config` retourne maintenant `"indexing": atomic.LoadInt32(&s.indexing) > 0`
+- `main.go` : boucle d'indexation des `roots` déplacée APRÈS création de `srv`, chaque goroutine appelle `srv.SetIndexing(true/false)`
+- `index.html` : div `#index-progress` avec CSS strip animé — affiché si `indexing === true`
+- `checkIndexState()` appellée au démarrage + toutes les 10 secondes via `setInterval`
+
+---
+
+### 5. P5 — Vérification de mise à jour (`main.go` + `server.go` + `index.html`)
+
+**Problème :** Aucun mécanisme d'auto-update — les utilisateurs restaient sur de vieilles versions sans le savoir.
+
+**Solution :**
+- `main.go` : goroutine de vérification lancée au démarrage avec délai 10 s (ne ralentit pas le démarrage)
+  - Appelle `https://api.github.com/repos/UFO2025-dev/filesearch/releases/latest`
+  - Parse `tag_name`, compare avec la constante `Version`
+  - Si version plus récente disponible → appelle `srv.SetLatestVersion(tag)`
+- `server.go` : champ `latestVersion string` + méthode `SetLatestVersion()` (mutex)
+  - `/health` retourne `"update_available"` (bool) + `"latest_version"` (string)
+- `index.html` : `initBadge()` lit `/health`, si `update_available` → affiche un toast discret en bas à droite pendant 8 secondes
+
+---
+
+### 6. Rebuild complet de `index.html`
+
+Un incident `UnicodeEncodeError` Python lors d'une écriture avait vidé `index.html` à 0 octet. Le fichier a été **entièrement reconstruit depuis zéro** (~500 lignes, 28 901 caractères) avec toutes les améliorations intégrées.
+
+**Leçon technique :** `open(path, 'w').write(content)` — si `write()` lève une exception, le fichier est déjà tronqué. Toujours utiliser `errors='surrogateescape'` en lecture ET écriture pour les fichiers contenant des caractères non-ASCII.
+
+---
+
+### 7. Vérification finale
+
+```
+go build ./...   → RC 0 (pas d'erreur)
+go test ./...    → tous les packages OK
+  internal/cache        cached
+  internal/db           cached
+  internal/indexer      cached
+  internal/security     cached
+  internal/server       0.022s
+  internal/watcher      cached
+```
+
+---
+
+### Fichiers modifiés cette session
+
+| Fichier | Changements |
+|---------|-------------|
+| `internal/server/static/index.html` | Rebuild complet — AbortController, onboarding, progress bar, toasts, erreurs humaines |
+| `internal/server/server.go` | `indexing int32`, `latestVersion`, `SetIndexing()`, `SetLatestVersion()`, champs dans `/api/config` et `/health` |
+| `cmd/server/main.go` | Import `encoding/json`, SetIndexing wrapping, goroutine update-check GitHub API |
+
+---
+
+### État du projet après cette session
+
+| Composant | État |
+|-----------|------|
+| Build Linux | ✅ OK |
+| Tests `go test ./...` | ✅ OK — tous verts |
+| P3 debounce + AbortController | ✅ Fait |
+| P3 messages d'erreur humains | ✅ Fait |
+| P3 onboarding état vide | ✅ Fait |
+| P3 barre de progression indexation | ✅ Fait |
+| P5 vérification mise à jour | ✅ Fait |
+| Push GitHub | ✅ `master` → `36db7bf` et suivants |
+| Score estimé | ~81/100 (Phase 3 complète) |
+
+### Prochaine étape recommandée
+
+**Phase 4 — Performance & Scale :**
+- `p4-count-sql` : `COUNT(*)` SQL au lieu de `AllPaths()` (25 MB/appel → 1 ms)
+- `p4-sort-slice` : `sort.Slice` au lieu d'insertion sort O(n²)
+- `p4-fts5-optimize` : PRAGMA optimize toutes les 2h
+- `p4-integrity-check` : integrity_check au démarrage
+
+Puis **Phase 5 finale :** installateur Inno Setup `.exe` → score 90/100.
+
+---
