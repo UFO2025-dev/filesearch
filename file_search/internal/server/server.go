@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
+	"sync/atomic"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -44,6 +45,8 @@ type Server struct {
 	dirChangeCh     chan string
 	cfgMgr          *appcfg.Manager
 	httpSrv         *http.Server
+	indexing        int32
+	latestVersion   string
 }
 
 // New creates a new Server. database and emb may be nil for graceful degradation.
@@ -80,6 +83,22 @@ func (s *Server) effectiveMode() string {
 	}
 	return s.hwMode
 }
+// SetIndexing increments (add=true) or decrements (add=false) the active indexing counter.
+func (s *Server) SetIndexing(add bool) {
+	if add {
+		atomic.AddInt32(&s.indexing, 1)
+	} else {
+		atomic.AddInt32(&s.indexing, -1)
+	}
+}
+
+// SetLatestVersion stores the latest released version string.
+func (s *Server) SetLatestVersion(v string) {
+	s.mu.Lock()
+	s.latestVersion = v
+	s.mu.Unlock()
+}
+
 // chain wraps a handler with panic recovery, CSRF, rate-limiting, and auth middleware.
 func (s *Server) chain(h http.Handler) http.Handler {
 	return s.recoveryMiddleware(s.csrfMiddleware(s.rateLimitMiddleware(s.authMiddleware(h))))
@@ -142,11 +161,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
-		"app":            "filesearch",
-		"version":        s.version,
-		"status":         "ok",
-		"mode":           s.effectiveMode(),
-		"semantic_ready": semanticReady,
+		"app":              "filesearch",
+		"version":          s.version,
+		"status":           "ok",
+		"mode":             s.effectiveMode(),
+		"semantic_ready":   semanticReady,
+		"update_available": s.latestVersion != "" && s.latestVersion != s.version,
+		"latest_version":   s.latestVersion,
 	})
 }
 
@@ -367,6 +388,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"files_indexed":  total,
 		"files_embedded": embedded,
 		"db_size_bytes":  dbSizeBytes,
+		"indexing":       atomic.LoadInt32(&s.indexing) > 0,
 	})
 }
 

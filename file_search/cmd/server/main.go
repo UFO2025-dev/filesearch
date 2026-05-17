@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -221,23 +222,6 @@ func main() {
 	embClient := embedder.New("", "")
 	searchCache := cache.New(128, 30*time.Second)
 
-	// ── Index all configured directories ─────────────────────────────────
-	for _, d := range roots {
-		d := d
-		go func() {
-			slog.Info("indexer: starting", "dir", d)
-			stats, err := indexer.Run(ctx, database, d)
-			if err != nil {
-				slog.Error("indexer: failed", "dir", d, "err", err)
-				return
-			}
-			slog.Info("indexer: done", "dir", d,
-				"indexed", stats.Indexed,
-				"skipped", stats.Skipped,
-				"errors", stats.Errors)
-		}()
-		go watcher.New(d, database, searchCache).Run(ctx)
-	}
 
 	go func() {
 		bgIndexer := embedder.NewBackgroundIndexer(embClient, database, database)
@@ -256,6 +240,51 @@ func main() {
 	srv.SetDBPath(*dbPath)
 	srv.SetConfig(cfg)
 
+	// ── Index all configured directories ─────────────────────────────────────
+	for _, d := range roots {
+		d := d
+		go func() {
+			srv.SetIndexing(true)
+			defer srv.SetIndexing(false)
+			slog.Info("indexer: starting", "dir", d)
+			stats, err := indexer.Run(ctx, database, d)
+			if err != nil {
+				slog.Error("indexer: failed", "dir", d, "err", err)
+				return
+			}
+			slog.Info("indexer: done", "dir", d,
+				"indexed", stats.Indexed,
+				"skipped", stats.Skipped,
+				"errors", stats.Errors)
+		}()
+		go watcher.New(d, database, searchCache).Run(ctx)
+	}
+
+	// ── Update check: fetch latest GitHub release after 10s delay ──────────
+	go func() {
+		time.Sleep(10 * time.Second)
+		client := &http.Client{Timeout: 8 * time.Second}
+		resp, err := client.Get("https://api.github.com/repos/UFO2025-dev/filesearch/releases/latest")
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return
+		}
+		var release struct {
+			TagName string `json:"tag_name"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+			return
+		}
+		tag := strings.TrimPrefix(release.TagName, "v")
+		if tag != "" && tag != Version {
+			slog.Info("update available", "current", Version, "latest", tag)
+			srv.SetLatestVersion(tag)
+		}
+	}()
+
 	dirChangeCh := make(chan string, 4)
 	srv.SetDirChangeCh(dirChangeCh)
 	go func() {
@@ -263,6 +292,8 @@ func main() {
 			select {
 			case newDir := <-dirChangeCh:
 				go func(d string) {
+					srv.SetIndexing(true)
+					defer srv.SetIndexing(false)
 					stats, err := indexer.Run(ctx, database, d)
 					if err != nil {
 						slog.Error("indexer: failed for new dir", "dir", d, "err", err)

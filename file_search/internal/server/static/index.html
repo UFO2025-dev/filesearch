@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FileSearch</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d1117; --surface: #161b22; --border: #30363d;
+      --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+      --card-bg: #161b22; --hover: #1f2937;
+    }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; min-height: 100vh; padding: 1.5rem 1rem; }
+    .container { max-width: 860px; margin: 0 auto; }
+    header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; }
+    h1 { font-size: 1.5rem; font-weight: 700; }
+    .badge { padding: 0.25rem 0.65rem; background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.3); border-radius: 9999px; font-size: 0.8rem; color: var(--accent); }
+    .search-box { display: flex; gap: 0.75rem; margin-bottom: 1rem; position: relative; }
+    .search-wrapper { flex: 1; position: relative; }
+    input[type=text] { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 1rem; padding: 0.65rem 0.85rem; outline: none; transition: border-color 0.2s; }
+    input[type=text]:focus { border-color: var(--accent); }
+    button { background: var(--accent); color: #0d1117; border: none; border-radius: 8px; padding: 0.65rem 1.25rem; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s; white-space: nowrap; }
+    button:hover { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    .history-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; z-index: 100; overflow: hidden; display: none; }
+    .history-dropdown.visible { display: block; }
+    .history-item { padding: 0.5rem 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+    .history-item:hover { background: var(--hover); }
+    .hist-icon { color: var(--muted); font-size: 0.85rem; }
+    .mode-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .tab { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.85rem; font-size: 0.875rem; font-weight: 500; }
+    .tab.active { background: rgba(88,166,255,0.1); color: var(--accent); border-color: rgba(88,166,255,0.4); }
+    .filters-bar { display: flex; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+    .filters-bar.hidden { display: none; }
+    select { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 0.4rem 0.65rem; font-size: 0.875rem; }
+    .status-bar { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.75rem; min-height: 1.1em; }
+    .spinner { border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; width: 26px; height: 26px; animation: spin 0.7s linear infinite; margin: 1rem auto; }
+    .spinner.hidden { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .results { display: flex; flex-direction: column; gap: 0.6rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem 1rem; transition: border-color 0.15s; }
+    .card:hover { border-color: rgba(88,166,255,0.35); }
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
+    .card-title { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; min-width: 0; }
+    .card-name { font-weight: 600; font-size: 0.95rem; word-break: break-all; }
+    .score-badge { background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.25); border-radius: 9999px; padding: 0.15rem 0.55rem; font-size: 0.78rem; color: var(--accent); white-space: nowrap; }
+    .open-btn { background: transparent; color: var(--accent); border: 1px solid rgba(88,166,255,0.35); border-radius: 6px; padding: 0.3rem 0.65rem; font-size: 0.82rem; font-weight: 500; flex-shrink: 0; }
+    .open-btn:hover { background: rgba(88,166,255,0.08); }
+    .card-path { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; word-break: break-all; }
+    .card-snippet { font-size: 0.85rem; color: var(--muted); margin-top: 0.45rem; border-top: 1px solid var(--border); padding-top: 0.4rem; white-space: pre-wrap; overflow: hidden; max-height: 4em; }
+    .empty-state { text-align: center; padding: 3rem 1rem; color: var(--muted); }
+    .empty-state .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+    .pagination { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1.25rem; flex-wrap: wrap; }
+    .pagination button { background: transparent; color: var(--accent); border: 1px solid rgba(88,166,255,0.3); border-radius: 6px; padding: 0.35rem 0.8rem; font-size: 0.875rem; }
+    .pagination-info { font-size: 0.875rem; color: var(--muted); }
+    .settings-panel { display: none; flex-direction: column; gap: 1.5rem; padding: 1rem 0; }
+    .settings-panel.visible { display: flex; }
+    .settings-section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.1rem; }
+    .settings-section h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; }
+    .settings-row { display: flex; align-items: center; justify-content: space-between; padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; gap: 0.5rem; }
+    .settings-row:last-child { border-bottom: none; }
+    .settings-value { color: var(--accent); font-weight: 500; text-align: right; }
+    .settings-input { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.875rem; padding: 0.45rem 0.75rem; outline: none; }
+    .settings-input:focus { border-color: var(--accent); }
+    .settings-select { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 0.4rem 0.6rem; cursor: pointer; }
+    .settings-apply-btn { background: rgba(88,166,255,0.1); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); border-radius: 6px; padding: 0.4rem 0.85rem; font-size: 0.875rem; cursor: pointer; }
+    .settings-muted { font-size: 0.82rem; color: var(--muted); margin-top: 0.25rem; }
+    /* ── Progress bar ── */
+    .index-progress { display:none; margin-bottom:1rem; padding:0.75rem 1rem; background:rgba(88,166,255,0.08); border:1px solid rgba(88,166,255,0.2); border-radius:8px; }
+    .index-progress.visible { display:block; }
+    .index-progress-label { font-size:0.85rem; color:var(--accent); margin-bottom:0.4rem; }
+    .progress-track { height:6px; background:rgba(88,166,255,0.15); border-radius:9999px; overflow:hidden; }
+    .progress-fill { height:100%; background:var(--accent); border-radius:9999px; transition:width 0.4s ease; width:0%; }
+    /* ── Onboarding ── */
+    .onboarding { display:none; flex-direction:column; align-items:center; gap:1rem; padding:3rem 1rem; text-align:center; }
+    .onboarding.visible { display:flex; }
+    .onboarding-icon { font-size:3rem; }
+    .onboarding h2 { font-size:1.4rem; font-weight:600; }
+    .onboarding p { color:var(--muted); max-width:420px; line-height:1.6; }
+    .onboarding-btn { padding:0.65rem 1.5rem; background:var(--accent); color:#0d1117; border:none; border-radius:8px; font-size:0.95rem; font-weight:600; cursor:pointer; transition:opacity 0.2s; }
+    .onboarding-btn:hover { opacity:0.85; }
+    .error-msg { padding:1rem; background:rgba(248,81,73,0.08); border:1px solid rgba(248,81,73,0.25); border-radius:8px; color:#f85149; }
+    .error-msg strong { display:block; margin-bottom:0.25rem; }
+    /* ── Settings history select btn ── */
+    #clear-history-btn, .settings-select, select { background:var(--card-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:0.88rem; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>&#x1F50D; FileSearch</h1>
+      <span id="mode-badge" class="badge">&#x1F7E1; Avanc&#xE9;</span>
+    </header>
+    <div class="search-box">
+      <div class="search-wrapper">
+        <input type="text" id="query" placeholder="Rechercher dans vos fichiers&#x2026;" autofocus autocomplete="off">
+        <div id="history-dropdown" class="history-dropdown"></div>
+      </div>
+      <button id="search-btn">Rechercher</button>
+    </div>
+    <div class="mode-tabs">
+      <button class="tab active" data-mode="classic">&#x26A1; Classique</button>
+      <button class="tab" data-mode="semantic">&#x1F9E0; S&#xE9;mantique</button>
+      <button class="tab" data-mode="settings">&#x2699;&#xFE0F; Param&#xE8;tres</button>
+    </div>
+    <div id="filters-bar" class="filters-bar">
+      <select id="filter-ext">
+        <option value="">Tous les types</option>
+        <option value=".pdf">PDF</option>
+        <option value=".py">Python</option>
+        <option value=".txt">Texte</option>
+        <option value=".docx">Word</option>
+        <option value=".xlsx">Excel</option>
+        <option value=".md">Markdown</option>
+        <option value=".go">Go</option>
+        <option value=".js">JavaScript</option>
+      </select>
+      <select id="filter-since">
+        <option value="">Toutes dates</option>
+        <option value="today">Aujourd'hui</option>
+        <option value="week">Cette semaine</option>
+        <option value="month">Ce mois</option>
+      </select>
+    </div>
+    <div id="status-bar" class="status-bar"></div>
+    <div id="index-progress" class="index-progress">
+      <div class="index-progress-label" id="progress-label">&#x2699;&#xFE0F; Indexation en cours&#x2026;</div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+    </div>
+    <div id="onboarding" class="onboarding">
+      <div class="onboarding-icon">&#x1F50D;</div>
+      <h2>Bienvenue dans FileSearch</h2>
+      <p>Aucun fichier n&#x2019;est encore index&#xE9;. Ajoutez un dossier pour commencer &#xE0; rechercher dans vos documents.</p>
+      <button class="onboarding-btn" id="onboarding-add-btn">&#x1F4C1; Ajouter un dossier</button>
+    </div>
+    <div id="spinner" class="spinner hidden"></div>
+    <div id="results" class="results"></div>
+    <div id="pagination" class="pagination"></div>
+    <div id="settings-panel" class="settings-panel">
+      <div class="settings-section">
+        <h3>&#x1F4CA; Statistiques</h3>
+        <div id="settings-stats"><span style="color:var(--muted)">Chargement&#x2026;</span></div>
+      </div>
+      <div class="settings-section">
+        <h3>&#x1F4C1; Dossier index&#xE9;</h3>
+        <div id="settings-roots"><span style="color:var(--muted)">Chargement&#x2026;</span></div>
+        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+          <input id="settings-new-dir" type="text" class="settings-input" style="flex:1;min-width:180px" placeholder="/mnt/c/Users/HP/Documents/NouveauDossier">
+          <button id="settings-add-dir" class="settings-apply-btn">+ Ajouter</button>
+        </div>
+        <div id="settings-dir-msg" class="settings-muted" style="margin-top:0.35rem"></div>
+      </div>
+      <div class="settings-section">
+        <h3>&#x1F916; Mode IA</h3>
+        <div id="settings-mode"><span style="color:var(--muted)">Chargement&#x2026;</span></div>
+        <div style="margin-top:0.6rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+          <select id="settings-mode-select" class="settings-select">
+            <option value="auto">&#x1F504; Automatique</option>
+            <option value="Essentiel">&#x1F535; Essentiel</option>
+            <option value="Avanc&#xE9;">&#x1F7E1; Avanc&#xE9;</option>
+            <option value="Pro">&#x1F7E2; Pro</option>
+          </select>
+          <button id="settings-mode-apply" class="settings-apply-btn">Appliquer</button>
+        </div>
+        <div id="settings-mode-msg" class="settings-muted" style="margin-top:0.35rem">D&#xE9;tect&#xE9; automatiquement selon votre mat&#xE9;riel (CPU, RAM, GPU).</div>
+      </div>
+      <div class="settings-section">
+        <h3>&#x1F552; Historique des recherches</h3>
+        <div id="settings-history-list"></div>
+        <button id="clear-history-btn" style="margin-top:0.75rem;background:rgba(248,81,73,0.1);color:#f85149;border:1px solid rgba(248,81,73,0.3);border-radius:6px;padding:0.4rem 0.8rem;cursor:pointer;font-size:0.85rem;">
+          &#x1F5D1; Effacer l'historique
+        </button>
+      </div>
+    </div>
+  </div>
+  <script>
+    'use strict';
+    const $ = id => document.getElementById(id);
+    let currentMode = 'classic';
+    let currentPage = 1;
+    let lastQuery = '';
+    let debounceTimer = null;
+    let currentAbort = null;
+
+    // ── History helpers ──────────────────────────────────────────
+    const HISTORY_KEY = 'filesearch_history';
+    function getHistory() {
+      try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch(_) { return []; }
+    }
+    function addToHistory(q) {
+      let h = getHistory().filter(x => x !== q);
+      h.unshift(q);
+      if (h.length > 10) h = h.slice(0, 10);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+    }
+    function clearHistory() {
+      localStorage.removeItem(HISTORY_KEY);
+      hideHistoryDropdown();
+    }
+
+    // ── History dropdown ─────────────────────────────────────────
+    function showHistoryDropdown() {
+      const h = getHistory();
+      const dd = $('history-dropdown');
+      if (!h.length) { dd.classList.remove('visible'); return; }
+      dd.innerHTML = h.map(q =>
+        '<div class="history-item"><span class="hist-icon">&#x1F552;</span>' + esc(q) + '</div>'
+      ).join('');
+      dd.querySelectorAll('.history-item').forEach((el, i) => {
+        el.addEventListener('click', () => {
+          $('query').value = h[i];
+          hideHistoryDropdown();
+          currentPage = 1;
+          performSearch(h[i]);
+        });
+      });
+      dd.classList.add('visible');
+    }
+    function hideHistoryDropdown() { $('history-dropdown').classList.remove('visible'); }
+
+    $('query').addEventListener('focus', () => {
+      if (!$('query').value.trim()) showHistoryDropdown();
+    });
+    $('query').addEventListener('input', () => {
+      const q = $('query').value.trim();
+      if (!q) { showHistoryDropdown(); }
+      else {
+        hideHistoryDropdown();
+        if (currentMode === 'classic') {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => { currentPage = 1; performSearch(q); }, 300);
+        }
+      }
+    });
+    document.addEventListener('click', e => {
+      if (!$('query').contains(e.target) && !$('history-dropdown').contains(e.target)) {
+        hideHistoryDropdown();
+      }
+    });
+
+    // ── Tab switching ────────────────────────────────────────────
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentMode = tab.dataset.mode;
+        currentPage = 1;
+        if (currentMode === 'settings') {
+          showSettings();
+        } else {
+          hideSettings();
+          const q = $('query').value.trim();
+          if (q) performSearch(q);
+        }
+        $('filters-bar').classList.toggle('hidden', currentMode !== 'classic');
+      });
+    });
+
+    $('query').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { const q = $('query').value.trim(); if (q) { currentPage = 1; performSearch(q); } }
+      if (e.key === 'Escape') hideHistoryDropdown();
+    });
+    $('search-btn').addEventListener('click', () => {
+      const q = $('query').value.trim(); if (q) { currentPage = 1; performSearch(q); }
+    });
+
+    $('filter-ext').addEventListener('change', () => {
+      const q = $('query').value.trim(); if (q) { currentPage = 1; searchClassic(q); }
+    });
+    $('filter-since').addEventListener('change', () => {
+      const q = $('query').value.trim(); if (q) { currentPage = 1; searchClassic(q); }
+    });
+
+    function performSearch(q) {
+      hideHistoryDropdown();
+      addToHistory(q);
+      lastQuery = q;
+      currentMode === 'classic' ? searchClassic(q) : searchSemantic(q);
+    }
+
+    async function searchClassic(q) {
+      if (currentAbort) { currentAbort.abort(); }
+      currentAbort = new AbortController();
+      showSpinner(true);
+      try {
+        const ext   = $('filter-ext').value;
+        const since = $('filter-since').value;
+        let url = '/search?q=' + encodeURIComponent(q) + '&page=' + currentPage;
+        if (ext)   url += '&ext='   + encodeURIComponent(ext);
+        if (since) url += '&since=' + encodeURIComponent(since);
+        const res = await fetch(url, { signal: currentAbort.signal });
+        if (res.status === 429) { showError('<strong>Trop de requ\u00eates</strong> Attendez quelques secondes et r\u00e9essayez.'); return; }
+        if (res.status === 503) { showError('<strong>Serveur non pr\u00eat</strong> L\u2019indexation est en cours, r\u00e9essayez dans un instant.'); return; }
+        if (!res.ok) { showError('<strong>Erreur serveur (' + res.status + ')</strong>'); return; }
+        const data = await res.json();
+        renderResults(data.results || [], 'classic');
+        renderPagination(data.page, data.pages, data.total, q);
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        showError('<strong>Erreur r\u00e9seau</strong> V\u00e9rifiez que FileSearch est bien lanc\u00e9 et r\u00e9essayez.');
+      }
+      finally { showSpinner(false); }
+    }
+
+    async function searchSemantic(q) {
+      if (currentAbort) { currentAbort.abort(); }
+      currentAbort = new AbortController();
+      showSpinner(true);
+      $('pagination').innerHTML = '';
+      try {
+        const res = await fetch('/api/search/semantic?q=' + encodeURIComponent(q), { signal: currentAbort.signal });
+        if (res.status === 503) { showError('<strong>Mode s\u00e9mantique non disponible</strong> Essayez le mode Classique ou v\u00e9rifiez que des fichiers sont index\u00e9s.'); return; }
+        if (!res.ok) { showError('<strong>Erreur (' + res.status + ')</strong>'); return; }
+        const data = await res.json();
+        renderResults(data.results || [], 'semantic');
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        showError('<strong>Erreur r\u00e9seau</strong> V\u00e9rifiez que FileSearch est bien lanc\u00e9.');
+      }
+      finally { showSpinner(false); }
+    }
+
+    function renderResults(results, mode) {
+      const container = $('results');
+      if (!results.length) {
+        container.innerHTML = '<div class="empty-state"><div class="icon">&#x1F50D;</div><p>Aucun r\u00e9sultat trouv\u00e9</p></div>';
+        return;
+      }
+      container.innerHTML = results.map(r => {
+        const name = (r.path || '').split(/[\\/]/).filter(Boolean).pop() || r.path || '';
+        const scoreHtml = (mode === 'semantic' && r.score != null)
+          ? '<span class="score-badge">Similarit\u00e9\u00a0: ' + Math.round(r.score * 100) + '\u00a0%</span>' : '';
+        const snippetHtml = (mode === 'classic' && r.snippet)
+          ? '<div class="card-snippet">' + esc(r.snippet) + '</div>' : '';
+        return '<div class="card"><div class="card-header"><div class="card-title"><span class="card-name">' +
+          esc(name) + '</span>' + scoreHtml + '</div>' +
+          '<button class="open-btn" data-path="' + escAttr(r.path) + '">\uD83D\uDCC2 Ouvrir</button></div>' +
+          '<div class="card-path">' + esc(r.path) + '</div>' + snippetHtml + '</div>';
+      }).join('');
+      container.querySelectorAll('.open-btn').forEach(btn => {
+        btn.addEventListener('click', () => openFile(btn.dataset.path));
+      });
+    }
+
+    function renderPagination(page, pages, total, q) {
+      const container = $('pagination');
+      if (!pages || pages <= 1) {
+        container.innerHTML = total > 0 ? '<span class="pagination-info">' + total + ' r\u00e9sultat(s)</span>' : '';
+        return;
+      }
+      container.innerHTML =
+        '<button id="prev-btn"' + (page <= 1 ? ' disabled' : '') + '>\u2190 Pr\u00e9c\u00e9dent</button>' +
+        '<span class="pagination-info">Page ' + page + '\u00a0/\u00a0' + pages + '\u00a0(' + total + ' r\u00e9sultats)</span>' +
+        '<button id="next-btn"' + (page >= pages ? ' disabled' : '') + '>Suivant \u2192</button>';
+      const prev = $('prev-btn'), next = $('next-btn');
+      if (prev) prev.addEventListener('click', () => { currentPage--; searchClassic(q); });
+      if (next) next.addEventListener('click', () => { currentPage++; searchClassic(q); });
+    }
+
+    async function openFile(path) {
+      try {
+        const res = await fetch('/open', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path })
+        });
+        if (!res.ok) alert('Impossible d\'ouvrir\u00a0: ' + (await res.text()));
+      } catch (err) { alert('Erreur\u00a0: ' + err.message); }
+    }
+
+    // ── Settings panel ───────────────────────────────────────────
+    let settingsWired = false;
+    function showSettings() {
+      $('results').innerHTML = '';
+      $('pagination').innerHTML = '';
+      $('settings-panel').classList.add('visible');
+      loadSettings();
+      renderSettingsHistory();
+      if (!settingsWired) {
+        settingsWired = true;
+        $('settings-add-dir').addEventListener('click', () => {
+          const dir = $('settings-new-dir').value.trim();
+          if (!dir) return;
+          applySettings({ dir }, $('settings-dir-msg'));
+          $('settings-new-dir').value = '';
+        });
+        $('settings-mode-apply').addEventListener('click', () => {
+          const mode = $('settings-mode-select').value;
+          applySettings({ mode_override: mode }, $('settings-mode-msg'));
+        });
+      }
+    }
+    function hideSettings() {
+      $('settings-panel').classList.remove('visible');
+    }
+
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/config');
+        if (!res.ok) return;
+        const d = await res.json();
+        const modeEmojis = { 'Essentiel': '\uD83D\uDD35', 'Avanc\u00e9': '\uD83D\uDFE1', 'Pro': '\uD83D\uDFE2' };
+        const effectiveMode = d.mode_override || d.mode || '';
+        $('settings-mode').innerHTML = '<span class="settings-value">' + (modeEmojis[effectiveMode]||'\uD83D\uDFE1') + ' ' + esc(effectiveMode) + '</span>';
+        const sel = $('settings-mode-select');
+        if (sel) sel.value = d.mode_override || 'auto';
+        $('settings-roots').innerHTML = (d.indexed_roots||[]).map(r =>
+          '<div class="settings-row"><span>' + esc(r) + '</span></div>'
+        ).join('') || '<span style="color:var(--muted)">Aucun</span>';
+        const sizeMb = d.db_size_bytes ? (d.db_size_bytes / 1048576).toFixed(1) + ' MB' : '\u2014';
+        $('settings-stats').innerHTML =
+          '<div class="settings-row"><span>Fichiers index\u00e9s</span><span class="settings-value">' + (d.files_indexed||0) + '</span></div>' +
+          '<div class="settings-row"><span>Embeddings IA</span><span class="settings-value">' + (d.files_embedded||0) + '</span></div>' +
+          '<div class="settings-row"><span>Taille base de donn\u00e9es</span><span class="settings-value">' + sizeMb + '</span></div>';
+      } catch(_) {}
+    }
+
+    async function applySettings(payload, msgEl) {
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const d = await res.json();
+        if (d.ok) {
+          if (msgEl) { msgEl.textContent = '\u2705 Appliqu\u00e9'; setTimeout(() => { if(msgEl) msgEl.textContent=''; }, 3000); }
+          loadSettings();
+        } else {
+          if (msgEl) msgEl.textContent = '\u274C ' + (d.error || 'Erreur');
+        }
+      } catch(e) {
+        if (msgEl) msgEl.textContent = '\u274C Erreur r\u00e9seau';
+      }
+    }
+
+    function renderSettingsHistory() {
+      const h = getHistory();
+      const el = $('settings-history-list');
+      if (!h.length) {
+        el.innerHTML = '<span style="color:var(--muted);font-size:0.9rem;">Aucun historique</span>';
+        return;
+      }
+      el.innerHTML = h.map(q =>
+        '<div class="settings-row"><span>' + esc(q) + '</span>' +
+        '<button onclick="fillSearch(\''+escAttr(q)+'\');" style="background:none;border:1px solid rgba(88,166,255,0.3);color:var(--accent);border-radius:4px;padding:0.2rem 0.5rem;cursor:pointer;font-size:0.8rem;">&#x2197;</button>' +
+        '</div>'
+      ).join('');
+    }
+    function fillSearch(q) {
+      $('query').value = q;
+      document.querySelector('.tab[data-mode="classic"]').click();
+    }
+
+    $('clear-history-btn').addEventListener('click', () => {
+      clearHistory();
+      renderSettingsHistory();
+    });
+
+    // ── Helpers ──────────────────────────────────────────────────
+    function showToast(msg) {
+      let t = document.getElementById('toast');
+      if (!t) {
+        t = document.createElement('div');
+        t.id = 'toast';
+        t.style.cssText = 'position:fixed;bottom:1.5rem;right:1.5rem;background:#161b22;border:1px solid rgba(88,166,255,0.4);color:var(--text);padding:0.75rem 1.1rem;border-radius:8px;font-size:0.87rem;max-width:380px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);cursor:pointer;';
+        t.onclick = () => t.remove();
+        document.body.appendChild(t);
+      }
+      t.textContent = msg;
+      clearTimeout(t._timer);
+      t._timer = setTimeout(() => t.remove(), 8000);
+    }
+    function showSpinner(show) { $('spinner').classList.toggle('hidden', !show); }
+    function showError(msg) { $('results').innerHTML = '<div class="error-msg">' + msg + '</div>'; }
+    function clearResults() { $('results').innerHTML = ''; $('pagination').innerHTML = ''; }
+    function esc(s) {
+      return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function escAttr(s) { return (s || '').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+    async function updateStatus() {
+      try {
+        const res = await fetch('/api/status');
+        if (!res.ok) return;
+        const d = await res.json();
+        const bar = $('status-bar');
+        if (d.percent >= 100) bar.textContent = '\uD83E\uDDE0 IA pr\u00eate \u2705';
+        else if (d.total > 0) bar.textContent = 'IA\u00a0: ' + d.embedded + '/' + d.total + ' fichiers index\u00e9s (' + d.percent + '\u00a0%)';
+        else bar.textContent = '';
+      } catch (_) {}
+    }
+
+    async function checkIndexState() {
+      try {
+        const res = await fetch('/api/config');
+        if (!res.ok) return;
+        const d = await res.json();
+        const n = d.files_indexed || 0;
+        const prog = $('index-progress');
+        const board = $('onboarding');
+        if (d.indexing) {
+          prog.classList.add('visible');
+          board.classList.remove('visible');
+          const pct = d.total_files > 0 ? Math.min(Math.round(n / d.total_files * 100), 99) : 0;
+          $('progress-fill').style.width = pct + '%';
+          $('progress-label').textContent = '\u2699\ufe0f Indexation\u00a0: ' + n + ' fichiers trait\u00e9s\u2026';
+        } else {
+          prog.classList.remove('visible');
+          if (n === 0) { board.classList.add('visible'); }
+          else { board.classList.remove('visible'); }
+        }
+      } catch (_) {}
+    }
+
+    async function initBadge() {
+      try {
+        const res = await fetch('/health');
+        if (!res.ok) return;
+        const d = await res.json();
+        if (d.mode) {
+          const emojis = { 'Essentiel': '\uD83D\uDD35', 'Avanc\u00e9': '\uD83D\uDFE1', 'Pro': '\uD83D\uDFE2' };
+          $('mode-badge').textContent = (emojis[d.mode] || '\uD83D\uDFE1') + ' ' + d.mode;
+        }
+        if (d.update_available && d.latest_version) {
+          showToast('\uD83D\uDE80 Mise \u00e0 jour disponible\u00a0: v' + d.latest_version + ' \u2014 https://github.com/UFO2025-dev/filesearch/releases');
+        }
+      } catch (_) {}
+    }
+
+    updateStatus();
+    initBadge();
+    checkIndexState();
+    setInterval(updateStatus, 30000);
+    setInterval(checkIndexState, 10000);
+    const _ob = $('onboarding-add-btn');
+    if (_ob) _ob.addEventListener('click', () => {
+      document.querySelector('.tab[data-mode="settings"]').click();
+      setTimeout(() => { const inp = $('settings-new-dir'); if (inp) inp.focus(); }, 200);
+    });
+  </script>
+</body>
+</html>
