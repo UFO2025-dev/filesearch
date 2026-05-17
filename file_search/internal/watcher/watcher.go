@@ -95,13 +95,23 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
-// addDirsRecursive registers every subdirectory of root with the watcher.
+const maxWatchedDirs = 10_000
+
+// addDirsRecursive registers subdirectories of root with the watcher up to maxWatchedDirs.
+// Capping prevents handle exhaustion on large trees (OneDrive, NAS, etc.).
 func addDirsRecursive(fsw *fsnotify.Watcher, root string) error {
+	count := 0
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
+			if count >= maxWatchedDirs {
+				slog.Warn("watcher: dir cap reached, subtree will not be watched",
+					"cap", maxWatchedDirs, "path", path)
+				return filepath.SkipDir
+			}
+			count++
 			return fsw.Add(path)
 		}
 		return nil

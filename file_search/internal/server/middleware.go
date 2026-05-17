@@ -43,28 +43,48 @@ func (b *bucket) allow() bool {
 type rateLimiterStore struct {
 	mu      sync.Mutex
 	buckets map[string]*bucket
+	done    chan struct{}
 }
 
 func newRateLimiterStore() *rateLimiterStore {
-	s := &rateLimiterStore{buckets: make(map[string]*bucket)}
+	s := &rateLimiterStore{
+		buckets: make(map[string]*bucket),
+		done:    make(chan struct{}),
+	}
 	// Evict idle buckets every 5 minutes to avoid unbounded memory growth.
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
-		for range t.C {
-			s.mu.Lock()
-			now := time.Now()
-			for ip, b := range s.buckets {
-				b.mu.Lock()
-				idle := now.Sub(b.last) > 10*time.Minute
-				b.mu.Unlock()
-				if idle {
-					delete(s.buckets, ip)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				s.mu.Lock()
+				now := time.Now()
+				for ip, b := range s.buckets {
+					b.mu.Lock()
+					idle := now.Sub(b.last) > 10*time.Minute
+					b.mu.Unlock()
+					if idle {
+						delete(s.buckets, ip)
+					}
 				}
+				s.mu.Unlock()
+			case <-s.done:
+				return
 			}
-			s.mu.Unlock()
 		}
 	}()
 	return s
+}
+
+// Stop terminates the background eviction goroutine.
+func (s *rateLimiterStore) Stop() {
+	select {
+	case <-s.done:
+		// already stopped
+	default:
+		close(s.done)
+	}
 }
 
 func (s *rateLimiterStore) get(ip string) *bucket {

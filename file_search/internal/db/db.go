@@ -341,3 +341,11 @@ func (d *DB) AllPaths(ctx context.Context) ([]string, error) {
 	}
 	return paths, rows.Err()
 }
+
+// FileCount returns the total number of indexed files without loading all paths.
+func (d *DB) FileCount(ctx context.Context) (int, error) {
+	var n int
+	err := d.conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM files`).Scan(&n)
+	return n, err
+}
+

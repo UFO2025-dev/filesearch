@@ -122,6 +122,7 @@ func (s *Server) Run() error {
 
 // Shutdown gracefully stops the HTTP server.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.limiter.Stop()
 	s.mu.Lock()
 	h := s.httpSrv
 	s.mu.Unlock()
@@ -351,8 +352,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	total := 0
 	if s.db != nil {
 		embedded, _ = s.db.VectorCount(r.Context())
-		paths, _ := s.db.AllPaths(r.Context())
-		total = len(paths)
+		total, _ = s.db.FileCount(r.Context())
 	}
 	var dbSizeBytes int64
 	if s.dbPath != "" {
@@ -402,6 +402,28 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "invalid body", http.StatusBadRequest)
 		return
+	}
+	// Validate directory before acquiring the lock.
+	if req.Dir != "" {
+		clean := filepath.Clean(req.Dir)
+		if !filepath.IsAbs(clean) {
+			writeError(w, "dir must be an absolute path", http.StatusBadRequest)
+			return
+		}
+		info, err := os.Stat(clean)
+		if err != nil {
+			writeError(w, "directory does not exist or is not accessible", http.StatusBadRequest)
+			return
+		}
+		if !info.IsDir() {
+			writeError(w, "path is not a directory", http.StatusBadRequest)
+			return
+		}
+		if isSensitivePath(clean) {
+			writeError(w, "cannot index system or sensitive directory", http.StatusForbidden)
+			return
+		}
+		req.Dir = clean
 	}
 	s.mu.Lock()
 	if req.ModeOverride == "auto" {
@@ -465,3 +487,22 @@ func isLibraryPath(path string) bool {
 	}
 	return false
 }
+
+// isSensitivePath returns true for known system/OS directories that should not be indexed.
+func isSensitivePath(p string) bool {
+	lower := strings.ToLower(filepath.ToSlash(p))
+	prefixes := []string{
+		// Windows
+		"c:/windows", "c:/program files", "c:/program files (x86)",
+		"c:/programdata", "c:/system volume information",
+		// Linux / macOS
+		"/proc", "/sys", "/dev", "/run", "/boot",
+	}
+	for _, prefix := range prefixes {
+		if lower == prefix || strings.HasPrefix(lower, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
