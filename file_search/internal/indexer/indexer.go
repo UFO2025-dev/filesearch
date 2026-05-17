@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/xml"
@@ -25,6 +26,7 @@ import (
 
 const (
 	maxFileSize   = 50 * 1024 * 1024 // 50MB
+	maxIndexBytes = 1 * 1024 * 1024  // 1MB of text indexed per file — avoids loading giant CSVs/logs into RAM
 	workersMaxCap = 8
 )
 
@@ -285,11 +287,21 @@ func extractRaw(path string) (string, error) {
 		return "", fmt.Errorf("open: %w", err)
 	}
 	defer f.Close()
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return "", fmt.Errorf("read: %w", err)
+
+	var sb strings.Builder
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024) // 64 KB per line — handles wide CSV rows
+	for scanner.Scan() {
+		sb.WriteString(scanner.Text())
+		sb.WriteByte('\n')
+		if sb.Len() >= maxIndexBytes {
+			break // cap at 1 MB — large CSVs/logs are keyword-searchable without loading all into RAM
+		}
 	}
-	return string(data), nil
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("scan: %w", err)
+	}
+	return sb.String(), nil
 }
 
 // ── PDF ────────────────────────────────────────────────────────────────────
