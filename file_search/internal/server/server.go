@@ -23,6 +23,7 @@ import (
 	appcfg "gatewatch/file_search/internal/config"
 	"gatewatch/file_search/internal/db"
 	"gatewatch/file_search/internal/embedder"
+	"gatewatch/file_search/internal/security"
 )
 
 //go:embed static
@@ -254,7 +255,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	})
 	if s.db != nil && q != "" {
 		go func() {
-			_ = s.db.LogSearch(context.Background(), q, "classic", total, 0)
+			logCtx, logCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer logCancel()
+			_ = s.db.LogSearch(logCtx, q, "classic", total, 0)
 		}()
 	}
 }
@@ -303,22 +306,23 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Security: path must be under one of the indexed roots (if configured).
+	// Security: validate path is under one of the indexed roots.
+	// Uses security.ValidatePath which resolves symlinks (EvalSymlinks) and
+	// uses filepath.Rel — safe against traversal AND symlink escape attacks.
 	slog.Info("handleOpen", "path", req.Path, "roots", s.indexedRoots)
 	if len(s.indexedRoots) > 0 {
 		allowed := false
-		cleanPath := filepath.Clean(req.Path)
 		for _, root := range s.indexedRoots {
 			if root == "" {
 				continue
 			}
-			cleanRoot := filepath.Clean(root)
-			if cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator)) {
+			if err := security.ValidatePath(root, req.Path); err == nil {
 				allowed = true
 				break
 			}
 		}
 		if !allowed {
+			slog.Warn("handleOpen: path rejected — outside indexed roots", "path", req.Path)
 			writeError(w, "path not in indexed roots: "+req.Path, http.StatusForbidden)
 			return
 		}
@@ -405,7 +409,9 @@ func (s *Server) handleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"results": hits})
 	if q != "" {
 		go func() {
-			_ = s.db.LogSearch(context.Background(), q, "semantic", len(hits), 0)
+			logCtx, logCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer logCancel()
+			_ = s.db.LogSearch(logCtx, q, "semantic", len(hits), 0)
 		}()
 	}
 }

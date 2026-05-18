@@ -63,45 +63,69 @@ func (d *DB) applyPragmas(ctx context.Context) error {
 	return nil
 }
 
+// currentSchemaVersion is the expected PRAGMA user_version for this build.
+// Bump this constant whenever a new migration step is added.
+const currentSchemaVersion = 3
+
 func (d *DB) migrate(ctx context.Context) error {
-	// FTS5 virtual table — path is UNINDEXED because we use the files shadow table.
-	_, err := d.conn.ExecContext(ctx, `
-		CREATE VIRTUAL TABLE IF NOT EXISTS documents USING fts5(
-			path     UNINDEXED,
-			content,
-			tokenize = 'porter'
-		)
-	`)
-	if err != nil {
-		return fmt.Errorf("db migrate fts5: %w", err)
+	// Read the current schema version from SQLite's built-in user_version pragma.
+	var version int
+	row := d.conn.QueryRowContext(ctx, `PRAGMA user_version`)
+	if err := row.Scan(&version); err != nil {
+		return fmt.Errorf("db migrate: cannot read user_version: %w", err)
 	}
 
-	// Shadow table: path -> (doc_rowid, sha256 hash).
-	// PRIMARY KEY on path gives O(1) lookup by path.
-	_, err = d.conn.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS files (
-			path      TEXT    PRIMARY KEY,
-			doc_rowid INTEGER NOT NULL,
-			hash      TEXT    NOT NULL DEFAULT '',
-			mtime     INTEGER NOT NULL DEFAULT 0
-		)
-	`)
-	if err != nil {
-		return fmt.Errorf("db migrate files: %w", err)
+	// v0 → v1: create FTS5 documents + files shadow table.
+	if version < 1 {
+		_, err := d.conn.ExecContext(ctx, `
+			CREATE VIRTUAL TABLE IF NOT EXISTS documents USING fts5(
+				path     UNINDEXED,
+				content,
+				tokenize = 'porter'
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("db migrate v1 fts5: %w", err)
+		}
+		_, err = d.conn.ExecContext(ctx, `
+			CREATE TABLE IF NOT EXISTS files (
+				path      TEXT    PRIMARY KEY,
+				doc_rowid INTEGER NOT NULL,
+				hash      TEXT    NOT NULL DEFAULT '',
+				mtime     INTEGER NOT NULL DEFAULT 0
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("db migrate v1 files: %w", err)
+		}
+		// Backfill from existing documents (handles upgrade from pre-files schema).
+		_, err = d.conn.ExecContext(ctx, `
+			INSERT OR IGNORE INTO files(path, doc_rowid, hash)
+			SELECT path, rowid, '' FROM documents
+		`)
+		if err != nil {
+			return fmt.Errorf("db migrate v1 backfill: %w", err)
+		}
 	}
 
-	// Backfill files from existing documents (migration from old schema).
-	_, err = d.conn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO files(path, doc_rowid, hash)
-		SELECT path, rowid, '' FROM documents
-	`)
-	if err != nil {
-		return fmt.Errorf("db migrate backfill: %w", err)
+	// v1 → v2: add mtime column to files (idempotent — ignore error if already present).
+	if version < 2 {
+		_, _ = d.conn.ExecContext(ctx, `ALTER TABLE files ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0`)
 	}
-	// Add mtime column if upgrading from old schema (ignore error = column already exists).
-	_, _ = d.conn.ExecContext(ctx, `ALTER TABLE files ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0`)
-	if err := d.EnsureAuditTable(ctx); err != nil {
-		return fmt.Errorf("db migrate audit: %w", err)
+
+	// v2 → v3: create audit_log table.
+	if version < 3 {
+		if err := d.EnsureAuditTable(ctx); err != nil {
+			return fmt.Errorf("db migrate v3 audit: %w", err)
+		}
+	}
+
+	// Stamp the new version only if we advanced.
+	if version < currentSchemaVersion {
+		if _, err := d.conn.ExecContext(ctx,
+			fmt.Sprintf(`PRAGMA user_version = %d`, currentSchemaVersion)); err != nil {
+			return fmt.Errorf("db migrate: cannot set user_version: %w", err)
+		}
 	}
 	return nil
 }

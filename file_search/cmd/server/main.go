@@ -19,6 +19,7 @@ import (
 
 	"gatewatch/file_search/internal/cache"
 	appcfg "gatewatch/file_search/internal/config"
+	"gatewatch/file_search/internal/paths"
 	"gatewatch/file_search/internal/db"
 	"gatewatch/file_search/internal/embedder"
 	"gatewatch/file_search/internal/hardware"
@@ -110,23 +111,51 @@ func main() {
 	addr    := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
 	port    := flag.Int("port", 0, "listen port (overrides -addr)")
 	dir     := flag.String("dir", "", "directory to index (added to config)")
-	dbPath  := flag.String("db", "data/index.db", "SQLite database path")
-	cfgPath := flag.String("config", "data/config.json", "config file path")
+	dbPath  := flag.String("db", "", "SQLite database path (default: platform data dir)")
+	cfgPath := flag.String("config", "", "config file path (default: platform config dir)")
 	token   := flag.String("token", "", "optional Bearer auth token")
 	noOpen  := flag.Bool("no-browser", false, "do not open browser on startup")
 	flag.Parse()
 
-	// Resolve relative DB/config paths relative to the executable directory.
-	// This prevents "data/" being created in the user's CWD on double-click.
+	// Resolve platform-appropriate data directories.
+	// Windows: %APPDATA%\FileSearch (config), %LOCALAPPDATA%\FileSearch (data/DB)
+	// Linux:   ~/.config/FileSearch (config), ~/.local/share/FileSearch (data/DB)
+	// Falls back to exe-relative paths if OS dirs cannot be determined.
+	appDirs, pathsErr := paths.Resolve()
+	var exeDir string
 	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		if !filepath.IsAbs(*dbPath) {
-			abs := filepath.Join(exeDir, *dbPath)
-			dbPath = &abs
+		exeDir = filepath.Dir(exe)
+	}
+	if pathsErr != nil {
+		// Fallback: keep exe-relative layout (better than pure CWD)
+		slog.Warn("paths: cannot resolve platform dirs, using exe-relative fallback", "err", pathsErr)
+		if exeDir != "" {
+			if *dbPath == "" {
+				p := filepath.Join(exeDir, "data", "index.db")
+				dbPath = &p
+			}
+			if *cfgPath == "" {
+				p := filepath.Join(exeDir, "data", "config.json")
+				cfgPath = &p
+			}
 		}
-		if !filepath.IsAbs(*cfgPath) {
-			abs := filepath.Join(exeDir, *cfgPath)
-			cfgPath = &abs
+	} else {
+		// Migrate from legacy exe-relative data/ layout (one-time, idempotent).
+		if exeDir != "" {
+			if migrated, mErr := paths.MigrateIfNeeded(exeDir, appDirs); mErr != nil {
+				slog.Warn("paths: migration error (non-fatal, continuing)", "err", mErr)
+			} else if migrated {
+				slog.Info("paths: migrated data from exe-relative layout to platform dirs",
+					"config_dir", appDirs.ConfigDir, "data_dir", appDirs.DataDir)
+			}
+		}
+		if *dbPath == "" {
+			p := appDirs.DBFile()
+			dbPath = &p
+		}
+		if *cfgPath == "" {
+			p := appDirs.ConfigFile()
+			cfgPath = &p
 		}
 	}
 
