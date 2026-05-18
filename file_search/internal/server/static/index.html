@@ -141,7 +141,7 @@
     <div id="audit-panel" class="panel hidden">
       <div class="settings-section">
         <h3>&#x1F4CB; Historique des recherches</h3>
-        <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem">Les 100 derni&#xE8;res recherches effectu&#xE9;es sur ce poste.</p>
+        <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem" data-i18n="audit_desc">Les 100 dernières recherches effectuées sur ce poste.</p>
         <button id="audit-export-btn" style="margin-bottom:1rem">&#x2B07; Exporter CSV (Excel)</button>
         <div id="audit-table-wrap" style="overflow-x:auto">
           <table id="audit-table" style="width:100%;border-collapse:collapse;font-size:.85rem">
@@ -155,7 +155,7 @@
             </thead>
             <tbody id="audit-tbody"></tbody>
           </table>
-          <p id="audit-empty" style="color:var(--muted);text-align:center;padding:2rem;display:none">Aucune recherche enregistr&#xE9;e.</p>
+          <p id="audit-empty" data-i18n="audit_empty" style="color:var(--muted);text-align:center;padding:2rem;display:none">Aucune recherche enregistrée.</p>
         </div>
       </div>
     </div>
@@ -207,6 +207,161 @@
   </div>
   <script>
     'use strict';
+
+// ── i18n ─────────────────────────────────────────────────────────
+const LANG_KEY = 'filesearch_lang';
+let lang = localStorage.getItem(LANG_KEY) || 'fr';
+
+const T = {
+  fr: {
+    search_placeholder: 'Rechercher dans vos fichiers\u2026',
+    search_btn: 'Rechercher',
+    tab_classic: '\u26A1 Classique',
+    tab_semantic: '\uD83E\uDDE0 S\u00E9mantique',
+    tab_settings: '\u2699\uFE0F Param\u00E8tres',
+    tab_audit: '\uD83D\uDCCB Historique',
+    filter_all_types: 'Tous les types',
+    filter_today: "Aujourd\u2019hui",
+    filter_week: 'Cette semaine',
+    filter_month: 'Ce mois',
+    loading: 'Chargement\u2026',
+    onboarding_title: 'Bienvenue dans FileSearch',
+    onboarding_desc: "Aucun fichier n\u2019est encore index\u00E9. Ajoutez un dossier pour commencer \u00E0 rechercher dans vos documents.",
+    onboarding_add: '\uD83D\uDCC1 Ajouter un dossier',
+    audit_title: '\uD83D\uDCCB Historique des recherches',
+    audit_desc: 'Les 100 derni\u00E8res recherches effectu\u00E9es sur ce poste.',
+    audit_export: '\u2B07 Exporter CSV (Excel)',
+    col_query: 'Requ\u00EAte',
+    col_results: 'R\u00E9sultats',
+    audit_empty: 'Aucune recherche enregistr\u00E9e.',
+    stats_title: '\uD83D\uDCCA Statistiques',
+    roots_title: '\uD83D\uDCC1 Dossier index\u00E9',
+    mode_title: '\uD83E\uDD16 Mode IA',
+    mode_auto: '\uD83D\uDD04 Automatique',
+    mode_apply: 'Appliquer',
+    mode_hint: 'D\u00E9tect\u00E9 automatiquement selon votre mat\u00E9riel',
+    history_title: '\uD83D\uDD52 Historique des recherches',
+    clear_history: "\uD83D\uDDD1 Effacer l\u2019historique",
+    diag_title: '\uD83D\uDEE0 Support & Diagnostics',
+    diag_desc: "T\u00E9l\u00E9charger une archive ZIP contenant les logs, la configuration et le journal d\u2019audit pour faciliter le support technique.",
+    diag_btn: '\uD83D\uDCE6 T\u00E9l\u00E9charger le bundle diagnostic',
+    add_dir: '+ Ajouter',
+    err_429: '<strong>Trop de requ\u00EAtes</strong> Attendez quelques secondes et r\u00E9essayez.',
+    err_503: '<strong>Serveur non pr\u00EAt</strong> L\u2019indexation est en cours, r\u00E9essayez dans quelques secondes.',
+    err_server: '<strong>Erreur serveur ({code})</strong>',
+    err_network: '<strong>Erreur r\u00E9seau</strong> V\u00E9rifiez que FileSearch est bien lanc\u00E9 et r\u00E9essayez.',
+    err_semantic_503: '<strong>Mode s\u00E9mantique non disponible</strong> Essayez le mode Classique ou v\u00E9rifiez votre mat\u00E9riel.',
+    err_semantic_other: '<strong>Erreur ({code})</strong>',
+    err_network2: '<strong>Erreur r\u00E9seau</strong> V\u00E9rifiez que FileSearch est bien lanc\u00E9.',
+    no_results: 'Aucun r\u00E9sultat trouv\u00E9',
+    similarity: 'Similarit\u00E9\u00A0: {n}\u00A0%',
+    open_file: '\uD83D\uDCC2 Ouvrir',
+    prev: '\u2190 Pr\u00E9c\u00E9dent',
+    next: 'Suivant \u2192',
+    result_count: '{n} r\u00E9sultat(s)',
+    page_info: 'Page {p}\u00A0/\u00A0{pages}\u00A0({n} r\u00E9sultats)',
+    cannot_open: 'Impossible d\u2019ouvrir\u00A0: ',
+    error_prefix: 'Erreur\u00A0: ',
+    applied: '\u2705 Appliqu\u00E9',
+    err_apply: '\u274C {msg}',
+    err_network3: '\u274C Erreur r\u00E9seau',
+    no_history: 'Aucun historique',
+    search_action: 'Rechercher',
+    ai_ready: '\uD83E\uDDE0 IA pr\u00EAte \u2705',
+    ai_indexing: 'IA\u00A0: {embedded}/{total} fichiers index\u00E9s ({pct}\u00A0%)',
+    indexing_progress: '\u2699\uFE0F Indexation\u00A0: {n} fichiers trait\u00E9s\u2026',
+    stat_files: 'Fichiers index\u00E9s',
+    stat_embeddings: 'Embeddings IA',
+    stat_db: 'Taille base de donn\u00E9es',
+    none: 'Aucun',
+    update_toast: '\uD83D\uDE80 Mise \u00E0 jour disponible\u00A0: v{v} \u2014 https://github.com/UFO2025-dev/gatewatch_mvp/releases',
+    lang_toggle: 'EN',
+  },
+  en: {
+    search_placeholder: 'Search your files\u2026',
+    search_btn: 'Search',
+    tab_classic: '\u26A1 Classic',
+    tab_semantic: '\uD83E\uDDE0 Semantic',
+    tab_settings: '\u2699\uFE0F Settings',
+    tab_audit: '\uD83D\uDCCB History',
+    filter_all_types: 'All types',
+    filter_today: 'Today',
+    filter_week: 'This week',
+    filter_month: 'This month',
+    loading: 'Loading\u2026',
+    onboarding_title: 'Welcome to FileSearch',
+    onboarding_desc: 'No files indexed yet. Add a folder to start searching your documents.',
+    onboarding_add: '\uD83D\uDCC1 Add a folder',
+    audit_title: '\uD83D\uDCCB Search history',
+    audit_desc: 'Last 100 searches performed on this machine.',
+    audit_export: '\u2B07 Export CSV (Excel)',
+    col_query: 'Query',
+    col_results: 'Results',
+    audit_empty: 'No searches recorded.',
+    stats_title: '\uD83D\uDCCA Statistics',
+    roots_title: '\uD83D\uDCC1 Indexed folder',
+    mode_title: '\uD83E\uDD16 AI Mode',
+    mode_auto: '\uD83D\uDD04 Automatic',
+    mode_apply: 'Apply',
+    mode_hint: 'Detected automatically based on your hardware.',
+    history_title: '\uD83D\uDD52 Search history',
+    clear_history: '\uD83D\uDDD1 Clear history',
+    diag_title: '\uD83D\uDEE0 Support & Diagnostics',
+    diag_desc: 'Download a ZIP archive containing logs, configuration and the audit journal to facilitate technical support.',
+    diag_btn: '\uD83D\uDCE6 Download diagnostic bundle',
+    add_dir: '+ Add',
+    err_429: '<strong>Too many requests</strong> Please wait a few seconds and retry.',
+    err_503: '<strong>Server not ready</strong> Indexing is in progress, retry in a few seconds.',
+    err_server: '<strong>Server error ({code})</strong>',
+    err_network: '<strong>Network error</strong> Check that FileSearch is running and retry.',
+    err_semantic_503: '<strong>Semantic mode unavailable</strong> Try Classic mode or check your hardware.',
+    err_semantic_other: '<strong>Error ({code})</strong>',
+    err_network2: '<strong>Network error</strong> Check that FileSearch is running.',
+    no_results: 'No results found',
+    similarity: 'Similarity: {n}\u00A0%',
+    open_file: '\uD83D\uDCC2 Open',
+    prev: '\u2190 Previous',
+    next: 'Next \u2192',
+    result_count: '{n} result(s)',
+    page_info: 'Page {p}\u00A0/\u00A0{pages}\u00A0({n} results)',
+    cannot_open: 'Cannot open: ',
+    error_prefix: 'Error: ',
+    applied: '\u2705 Applied',
+    err_apply: '\u274C {msg}',
+    err_network3: '\u274C Network error',
+    no_history: 'No history',
+    search_action: 'Search',
+    ai_ready: '\uD83E\uDDE0 AI ready \u2705',
+    ai_indexing: 'AI: {embedded}/{total} files indexed ({pct}\u00A0%)',
+    indexing_progress: '\u2699\uFE0F Indexing: {n} files processed\u2026',
+    stat_files: 'Indexed files',
+    stat_embeddings: 'AI embeddings',
+    stat_db: 'Database size',
+    none: 'None',
+    update_toast: '\uD83D\uDE80 Update available: v{v} \u2014 https://github.com/UFO2025-dev/gatewatch_mvp/releases',
+    lang_toggle: 'FR',
+  }
+};
+
+function t(key, vars) {
+  let s = (T[lang] || T.fr)[key] || key;
+  if (vars) Object.keys(vars).forEach(k => { s = s.replaceAll('{'+k+'}', vars[k]); });
+  return s;
+}
+
+function applyLocale() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPh);
+  });
+  const lb = $('lang-btn');
+  if (lb) lb.textContent = t('lang_toggle');
+}
+
+
     const $ = id => document.getElementById(id);
     let currentMode = 'classic';
     let currentPage = 1;
@@ -327,7 +482,7 @@
         if (since) url += '&since=' + encodeURIComponent(since);
         const res = await fetch(url, { signal: currentAbort.signal });
         if (res.status === 429) { showError('<strong>Trop de requ\u00eates</strong> Attendez quelques secondes et r\u00e9essayez.'); return; }
-        if (res.status === 503) { showError('<strong>Serveur non pr\u00eat</strong> L\u2019indexation est en cours, r\u00e9essayez dans un instant.'); return; }
+        if (res.status === 503) { showError(t('err_503')); return; }
         if (!res.ok) { showError('<strong>Erreur serveur (' + res.status + ')</strong>'); return; }
         const data = await res.json();
         renderResults(data.results || [], 'classic');
@@ -346,7 +501,7 @@
       $('pagination').innerHTML = '';
       try {
         const res = await fetch('/api/search/semantic?q=' + encodeURIComponent(q), { signal: currentAbort.signal });
-        if (res.status === 503) { showError('<strong>Mode s\u00e9mantique non disponible</strong> Essayez le mode Classique ou v\u00e9rifiez que des fichiers sont index\u00e9s.'); return; }
+        if (res.status === 503) { showError(t('err_semantic_503')); return; }
         if (!res.ok) { showError('<strong>Erreur (' + res.status + ')</strong>'); return; }
         const data = await res.json();
         renderResults(data.results || [], 'semantic');
@@ -358,6 +513,7 @@
     }
 
     function renderResults(results, mode) {
+  lastResults = results; lastResultMode = mode;
       const container = $('results');
       if (!results.length) {
         container.innerHTML = '<div class="empty-state"><div class="icon">&#x1F50D;</div><p>Aucun r\u00e9sultat trouv\u00e9</p></div>';
@@ -382,12 +538,12 @@
     function renderPagination(page, pages, total, q) {
       const container = $('pagination');
       if (!pages || pages <= 1) {
-        container.innerHTML = total > 0 ? '<span class="pagination-info">' + total + ' r\u00e9sultat(s)</span>' : '';
+        container.innerHTML = total > 0 ? '<span class="pagination-info">' + t('result_count', {n: total}) + '</span>' : '';
         return;
       }
       container.innerHTML =
-        '<button id="prev-btn"' + (page <= 1 ? ' disabled' : '') + '>\u2190 Pr\u00e9c\u00e9dent</button>' +
-        '<span class="pagination-info">Page ' + page + '\u00a0/\u00a0' + pages + '\u00a0(' + total + ' r\u00e9sultats)</span>' +
+        '<button id="prev-btn"' + (page <= 1 ? ' disabled' : '') + '>' + t('prev') + '</button>' +
+        '<span class="pagination-info">' + t('page_info', {p: page, pages: pages, n: total}) + '</span>' +
         '<button id="next-btn"' + (page >= pages ? ' disabled' : '') + '>Suivant \u2192</button>';
       const prev = $('prev-btn'), next = $('next-btn');
       if (prev) prev.addEventListener('click', () => { currentPage--; searchClassic(q); });
@@ -607,7 +763,7 @@
           $('version-badge').textContent = 'v' + d.version;
         }
         if (d.update_available && d.latest_version) {
-          showToast('\uD83D\uDE80 Mise \u00e0 jour disponible\u00a0: v' + d.latest_version + ' \u2014 https://github.com/UFO2025-dev/filesearch/releases');
+          showToast(t('update_toast', {v: d.latest_version}));
         }
       } catch (_) {}
     }
@@ -620,6 +776,25 @@
     checkIndexState();
     setInterval(updateStatus, 30000);
     setInterval(checkIndexState, 10000);
+
+// ── Language toggle ───────────────────────────────────────────
+let lastResults = [];
+let lastResultMode = 'classic';
+
+const _langBtn = $('lang-btn');
+if (_langBtn) {
+  _langBtn.addEventListener('click', () => {
+    lang = lang === 'fr' ? 'en' : 'fr';
+    localStorage.setItem(LANG_KEY, lang);
+    applyLocale();
+    // Re-render dynamic content if visible
+    if (currentMode === 'settings') loadSettings();
+    else if (currentMode === 'audit') showAudit();
+    else if (lastResults.length) renderResults(lastResults, lastResultMode);
+  });
+}
+
+applyLocale();
     const _ob = $('onboarding-add-btn');
     if (_ob) _ob.addEventListener('click', () => {
       document.querySelector('.tab[data-mode="settings"]').click();
