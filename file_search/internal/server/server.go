@@ -1,22 +1,24 @@
 package server
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
-	"os"
-	"sync"
-	"sync/atomic"
-	"fmt"
 	"io/fs"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
-	"strconv"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"gatewatch/file_search/internal/cache"
@@ -117,7 +119,7 @@ func (s *Server) Run() error {
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 
 	// Health â€” no auth (used by Docker health checks etc.).
-	mux.HandleFunc("/health", s.handleHealth)
+	mux.Handle("/health", s.chain(http.HandlerFunc(s.handleHealth)))
 
 	// Protected API routes.
 	mux.Handle("GET /search", s.chain(http.HandlerFunc(s.handleSearch)))
@@ -127,6 +129,7 @@ func (s *Server) Run() error {
 	mux.Handle("GET /api/audit/export", s.chain(http.HandlerFunc(s.handleAuditExport)))
 	mux.Handle("GET /api/status", s.chain(http.HandlerFunc(s.handleStatus)))
 	mux.Handle("GET /api/version", s.chain(http.HandlerFunc(s.handleVersion)))
+	mux.Handle("GET /api/diagnostics", s.chain(http.HandlerFunc(s.handleDiagnosticsBundle)))
 	mux.Handle("GET /api/config", s.chain(http.HandlerFunc(s.handleConfig)))
 	mux.Handle("POST /api/settings", s.chain(http.HandlerFunc(s.handleSettings)))
 
@@ -182,6 +185,122 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		"os":      runtime.GOOS + "/" + runtime.GOARCH,
 	})
 }
+// handleDiagnosticsBundle builds and streams a ZIP archive for support / bug reports.
+// Contents:
+//   info.json    — version, runtime, hardware mode, indexed roots, db stats
+//   config.json  — current /api/config response
+//   audit.csv    — full audit log
+//   filesearch.log — last 500 lines of the Windows log file (if present)
+func (s *Server) handleDiagnosticsBundle(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	filename := "filesearch-diag-" + time.Now().Format("20060102-150405") + ".zip"
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	// --- info.json ---
+	fileCount := 0
+	vectorCount := 0
+	var dbSizeBytes int64
+	if s.db != nil {
+		fileCount, _ = s.db.FileCount(ctx)
+		vectorCount, _ = s.db.VectorCount(ctx)
+	}
+	if s.dbPath != "" {
+		if info, err := os.Stat(s.dbPath); err == nil {
+			dbSizeBytes = info.Size()
+		}
+	}
+	info := map[string]any{
+		"version":       s.version,
+		"go":            runtime.Version(),
+		"os":            runtime.GOOS + "/" + runtime.GOARCH,
+		"hw_mode":       s.effectiveMode(),
+		"indexed_roots": s.indexedRoots,
+		"files_indexed": fileCount,
+		"vectors":       vectorCount,
+		"db_size_bytes": dbSizeBytes,
+		"generated_at":  time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := zipJSON(zw, "info.json", info); err != nil {
+		slog.Warn("diagnostics: info.json", "err", err)
+	}
+
+	// --- config.json ---
+	s.mu.Lock()
+	modeOverride := s.modeOverride
+	s.mu.Unlock()
+	cfg := map[string]any{
+		"mode":          s.effectiveMode(),
+		"mode_override": modeOverride,
+		"indexed_roots": s.indexedRoots,
+		"files_indexed": fileCount,
+		"db_size_bytes": dbSizeBytes,
+		"indexing":      atomic.LoadInt32(&s.indexing) > 0,
+	}
+	if err := zipJSON(zw, "config.json", cfg); err != nil {
+		slog.Warn("diagnostics: config.json", "err", err)
+	}
+
+	// --- audit.csv ---
+	if s.db != nil {
+		if csvData, err := s.db.AuditCSV(ctx); err == nil {
+			if f, err := zw.Create("audit.csv"); err == nil {
+				_, _ = fmt.Fprint(f, csvData)
+			}
+		}
+	}
+
+	// --- filesearch.log (last 500 lines) ---
+	logPath := windowsLogPath()
+	if logPath == "" {
+		// non-Windows: skip silently
+		goto done
+	}
+	if raw, err := os.ReadFile(logPath); err == nil {
+		tail := logTail(raw, 500)
+		if f, err := zw.Create("filesearch.log"); err == nil {
+			_, _ = f.Write(tail)
+		}
+	}
+done:
+}
+
+// zipJSON marshals v as indented JSON and writes it into the zip as name.
+func zipJSON(zw *zip.Writer, name string, v any) error {
+	f, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// logTail returns the last n lines of b.
+func logTail(b []byte, n int) []byte {
+	lines := bytes.Split(b, []byte("\n"))
+	if len(lines) <= n {
+		return b
+	}
+	return bytes.Join(lines[len(lines)-n:], []byte("\n"))
+}
+
+// windowsLogPath returns %APPDATA%\FileSearch\filesearch.log (empty on non-Windows).
+func windowsLogPath() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "FileSearch", "filesearch.log")
+}
+
+
 
 
 

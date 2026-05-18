@@ -196,6 +196,13 @@
           &#x1F5D1; Effacer l'historique
         </button>
       </div>
+      <div class="settings-section">
+        <h3>&#x1F6E0; Support &amp; Diagnostics</h3>
+        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">T&#xE9;l&#xE9;charger une archive ZIP contenant les logs, la configuration et les statistiques pour faciliter le d&#xE9;bogage.</p>
+        <button id="diag-export-btn" style="background:rgba(88,166,255,0.1);color:var(--accent);border:1px solid rgba(88,166,255,0.3);border-radius:6px;padding:0.4rem 0.9rem;cursor:pointer;font-size:0.85rem;">
+          &#x1F4E6; T&#xE9;l&#xE9;charger le bundle diagnostic
+        </button>
+      </div>
     </div>
   </div>
   <script>
@@ -605,6 +612,9 @@
       } catch (_) {}
     }
 
+    $('diag-export-btn').addEventListener('click', () => {
+      window.location.href = '/api/diagnostics';
+    });
     updateStatus();
     initBadge();
     checkIndexState();
