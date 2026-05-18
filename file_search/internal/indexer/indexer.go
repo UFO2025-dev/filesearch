@@ -60,6 +60,71 @@ var defaultExcludedDirs = map[string]bool{
 	"Program Files (x86)":       true,
 }
 
+// secretExcludedDirs are directory NAMES (basename) that contain credentials or
+// sensitive data. ALWAYS skipped — non-configurable hard policy.
+var secretExcludedDirs = map[string]bool{
+	".ssh":             true,
+	".gnupg":           true,
+	".gpg":             true,
+	".aws":             true,
+	".azure":           true,
+	".kube":            true,
+	".bitcoin":         true,
+	".ethereum":        true,
+	".electrum":        true,
+	"User Data":        true, // Chrome/Edge password store
+	"keystore":         true,
+	".password-store":  true,
+	".gnome-keyring":   true,
+}
+
+// secretExcludedPathSuffixes are lowercased forward-slash path suffixes matched
+// against the full path to catch deeply nested credential directories.
+var secretExcludedPathSuffixes = []string{
+	"/.ssh",
+	"/.gnupg",
+	"/.aws",
+	"/.azure",
+	"/.kube",
+	"/.bitcoin",
+	"/.ethereum",
+	"/google/chrome/user data/default",
+	"/mozilla/firefox",
+	"/microsoft/edge/user data/default",
+	"/appdata/roaming/microsoft/credentials",
+	"/appdata/roaming/microsoft/protect",
+	"/appdata/local/microsoft/credentials",
+}
+
+// secretFileBasenames are exact filenames (lowercased) that must never be indexed.
+var secretFileBasenames = map[string]bool{
+	".env":         true,
+	".env.local":   true,
+	".env.prod":    true,
+	".env.staging": true,
+	".envrc":       true,
+	"credentials":  true,
+	".netrc":       true,
+	".pgpass":      true,
+	"id_rsa":       true,
+	"id_ed25519":   true,
+	"id_ecdsa":     true,
+	"id_dsa":       true,
+}
+
+// secretFileExtensions are file extensions for private keys / keystores.
+// Always skipped regardless of supportedExtensions.
+var secretFileExtensions = map[string]bool{
+	".pem":  true,
+	".key":  true,
+	".p12":  true,
+	".pfx":  true,
+	".p8":   true,
+	".jks":  true,
+	".kdbx": true,
+	".asc":  true,
+}
+
 func adaptiveWorkers() int {
 	n := runtime.NumCPU() / 2
 	if n < 1 {
@@ -168,8 +233,22 @@ func Run(ctx context.Context, database *db.DB, root string, extraExclude ...stri
 				slog.Debug("indexer: skipping excluded dir", "dir", path)
 				return fs.SkipDir
 			}
+			// Hard-exclude secret directories (SSH keys, credentials, crypto wallets…).
+			baseName := filepath.Base(path)
+			if secretExcludedDirs[baseName] {
+				slog.Debug("indexer: skipping secret dir", "dir", path)
+				return fs.SkipDir
+			}
+			// Also check full lowercased path for deeply nested credential dirs.
+			lowerPath := strings.ToLower(filepath.ToSlash(path))
+			for _, suffix := range secretExcludedPathSuffixes {
+				if strings.HasSuffix(lowerPath, suffix) || strings.Contains(lowerPath, suffix+"/") {
+					slog.Debug("indexer: skipping secret path", "dir", path)
+					return fs.SkipDir
+				}
+			}
 			// Skip directories named "env" that look like Python venvs
-			if filepath.Base(path) == "env" {
+			if baseName == "env" {
 				if _, err := os.Stat(filepath.Join(path, "pyvenv.cfg")); err == nil {
 					slog.Debug("indexer: skipping Python venv", "dir", path)
 					return fs.SkipDir
@@ -178,6 +257,18 @@ func Run(ctx context.Context, database *db.DB, root string, extraExclude ...stri
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
+		// Hard-exclude secret file extensions (private keys, keystores, etc.).
+		if secretFileExtensions[ext] {
+			slog.Debug("indexer: skipping secret file ext", "path", path, "ext", ext)
+			mu.Lock(); stats.Skipped++; mu.Unlock()
+			return nil
+		}
+		// Hard-exclude known secret filenames (.env, id_rsa, credentials, etc.).
+		if secretFileBasenames[strings.ToLower(filepath.Base(path))] {
+			slog.Debug("indexer: skipping secret filename", "path", path)
+			mu.Lock(); stats.Skipped++; mu.Unlock()
+			return nil
+		}
 		if !supportedExtensions[ext] {
 			mu.Lock()
 			stats.Skipped++
