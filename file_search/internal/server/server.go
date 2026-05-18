@@ -126,6 +126,7 @@ func (s *Server) Run() error {
 	mux.Handle("GET /api/audit", s.chain(http.HandlerFunc(s.handleAudit)))
 	mux.Handle("GET /api/audit/export", s.chain(http.HandlerFunc(s.handleAuditExport)))
 	mux.Handle("GET /api/status", s.chain(http.HandlerFunc(s.handleStatus)))
+	mux.Handle("GET /api/version", s.chain(http.HandlerFunc(s.handleVersion)))
 	mux.Handle("GET /api/config", s.chain(http.HandlerFunc(s.handleConfig)))
 	mux.Handle("POST /api/settings", s.chain(http.HandlerFunc(s.handleSettings)))
 
@@ -173,6 +174,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"latest_version":   s.latestVersion,
 	})
 }
+// handleVersion returns the build version and Go runtime info.
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]string{
+		"version": s.version,
+		"go":      runtime.Version(),
+		"os":      runtime.GOOS + "/" + runtime.GOARCH,
+	})
+}
+
+
 
 // handleSearch runs a paginated FTS5 keyword search with optional filters.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
