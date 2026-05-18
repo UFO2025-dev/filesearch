@@ -1,81 +1,78 @@
-# Contribuer à FileSearch
+# Contributing to FileSearch
 
-Merci de l'intérêt ! Toute contribution est la bienvenue.
+Thank you for your interest in contributing.
 
-## 🚀 Démarrage rapide
+## Development Setup
 
 ```bash
-# 1. Fork ce repo sur GitHub, puis :
-git clone https://github.com/VOTRE_USERNAME/filesearch.git
-cd filesearch/file_search
-
-# 2. Installer les dépendances
-go mod download
-
-# 3. Lancer les tests
+git clone https://github.com/UFO2025-dev/gatewatch_mvp
+cd gatewatch_mvp/file_search
+go build ./...
 go test ./...
-
-# 4. Lancer le serveur en dev
-go run ./cmd/server -dir /mnt/c/Users/VotreNom/Documents
 ```
 
-## 🌿 Workflow de contribution
+Requirements: **Go 1.24+**, no CGO required (uses `modernc.org/sqlite` — pure Go SQLite).
+
+## Project Structure
 
 ```
-master          — branche stable
-feat/xxx        — nouvelle fonctionnalité
-fix/xxx         — correction de bug
-docs/xxx        — documentation uniquement
+file_search/
+  cmd/server/main.go          # Entry point, lifecycle management
+  internal/
+    cache/cache.go            # Thread-safe LRU cache with TTL
+    config/config.go          # Config load/save (%APPDATA% / ~/.config)
+    db/db.go                  # SQLite FTS5 schema, migrations, search
+    db/audit.go               # Audit log (search queries, file opens)
+    db/vectors.go             # Embedding vector storage
+    embedder/                 # Local semantic embedding (optional)
+    hardware/hardware.go      # CPU/GPU/RAM detection → mode selection
+    indexer/indexer.go        # File walk, worker pool, secrets exclusion
+    logger/logger.go          # Structured slog + log rotation
+    paths/validate.go         # Directory validation (UNC, OS paths)
+    server/server.go          # HTTP handlers + middleware chain
+    server/middleware.go      # Recovery, CSRF, rate-limit, auth
+    server/static/index.html  # Embedded single-page UI (EN/FR)
+    watcher/watcher.go        # fsnotify live re-indexing
+  benchmarks/                 # Reproducible go test -bench suite
+  .github/workflows/          # CI (build+test+vet+govulncheck) + Release
 ```
 
-1. **Créez une branche** depuis `master` :
-   ```bash
-   git checkout -b feat/ma-fonctionnalite
-   ```
+## Guidelines
 
-2. **Faites vos changements** en suivant les conventions ci-dessous
+### Code
+- Keep packages focused — one responsibility per package
+- All public functions must have Go doc comments
+- No CGO — the binary must compile with `CGO_ENABLED=0`
+- Run `go vet ./...` before opening a PR
+- Run `go test -race ./...` — all tests must pass with race detector
 
-3. **Lancez les tests** avant de soumettre :
-   ```bash
-   go test ./...
-   go build ./...
-   ```
+### Benchmarks
+- If your change touches hot paths (search, indexer, cache), add or update benchmarks in `benchmarks/`
+- Do not regress the baseline in `benchmarks/results/baseline_linux.txt` by >20%
+- Update baseline if you deliberately improve performance
 
-4. **Commitez** avec un message clair :
-   ```
-   feat: ajouter suppression de dossier dans les paramètres
-   fix: corriger le watcher sur les chemins avec espaces
-   docs: améliorer le README installation
-   ```
+### Security
+- Never add code that sends document content over the network
+- Hard-exclusions in `internal/indexer/indexer.go` must not be user-configurable
+- Path validation in `internal/server/middleware.go` must not be relaxed
 
-5. **Ouvrez une Pull Request** vers `master`
+### UI (`internal/server/static/index.html`)
+- All user-visible strings must be in the `T = {fr: {}, en: {}}` i18n dictionary
+- No external JS/CSS dependencies — single self-contained file
 
-## 📐 Conventions de code
+## Pull Request Process
 
-- **Go standard** : `gofmt`, pas de lint warnings
-- **Interfaces** : préférer les interfaces à l'injection directe
-- **Tests** : tout nouveau code doit avoir un test
-- **Logs** : utiliser `slog` (pas `fmt.Println`)
-- **Erreurs** : toujours wrapper avec `fmt.Errorf("context: %w", err)`
+1. Fork, create a branch: `git checkout -b feat/your-feature`
+2. Make changes, add tests
+3. `go test -race ./...` — must pass
+4. `go vet ./...` — must pass
+5. Open PR with a clear description of what and why
 
-## 🐛 Signaler un bug
+## What We Need Help With
 
-Ouvrez une [Issue GitHub](https://github.com/UFO2025-dev/filesearch/issues) avec :
-- La version (commit hash)
-- Les logs du serveur (`data/server.log`)
-- Les étapes pour reproduire
-
-## 💡 Idées de contributions
-
-| Priorité | Feature |
-|---|---|
-| 🔴 Haute | Suppression d'un dossier dans les paramètres |
-| 🔴 Haute | Hotkey global `Ctrl+Space` |
-| 🟡 Moyenne | Support macOS / Linux natif |
-| 🟡 Moyenne | Packaging MSI Windows |
-| 🟢 Facile | Plus d'extensions supportées dans le watcher |
-| 🟢 Facile | Thème sombre / clair dans l'UI |
-
-## 📄 Licence
-
-En contribuant, vous acceptez que votre code soit sous licence [MIT](LICENSE).
+- 🔲 Inno Setup installer script (`packaging/filesearch.iss`)
+- 🔲 sqlite-vec ANN integration (`internal/db/`)
+- 🔲 AES-256 DB encryption wrapper
+- 🔲 More language translations (ES, DE, AR…)
+- 🔲 Windows CI runner tests (currently Linux only in CI)
+- 🔲 PDF extraction improvements (complex layouts)
