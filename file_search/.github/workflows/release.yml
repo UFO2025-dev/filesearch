@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # needed to create GitHub releases
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: file_search
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: file_search/go.mod
+          cache-dependency-path: file_search/go.sum
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Windows/amd64 .exe
+        run: |
+          GOOS=windows GOARCH=amd64 go build \
+            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+            -o filesearch-${{ github.ref_name }}-windows-amd64.exe \
+            ./cmd/server/
+        env:
+          CGO_ENABLED: "0"
+
+      - name: Build Linux/amd64 binary
+        run: |
+          GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+            -o filesearch-${{ github.ref_name }}-linux-amd64 \
+            ./cmd/server/
+
+      - name: Generate checksums
+        run: |
+          sha256sum \
+            filesearch-${{ github.ref_name }}-windows-amd64.exe \
+            filesearch-${{ github.ref_name }}-linux-amd64 \
+            > checksums.txt
+          cat checksums.txt
+
+      - name: Run tests before publishing
+        run: go test -count=1 -timeout 120s ./...
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "FileSearch ${{ github.ref_name }}"
+          body: |
+            ## FileSearch ${{ github.ref_name }}
+
+            ### Installation Windows
+            1. Télécharger `filesearch-${{ github.ref_name }}-windows-amd64.exe`
+            2. Double-cliquer pour lancer — le navigateur s'ouvre automatiquement
+            3. Glisser-déposer un dossier pour l'indexer
+
+            ### Checksums (SHA-256)
+            Voir `checksums.txt` joint à cette release.
+
+            ### Changelog
+            Voir [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/master/file_search/CHANGELOG.md) pour le détail des changements.
+          files: |
+            file_search/filesearch-${{ github.ref_name }}-windows-amd64.exe
+            file_search/filesearch-${{ github.ref_name }}-linux-amd64
+            file_search/checksums.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}

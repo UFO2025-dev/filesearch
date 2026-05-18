@@ -10,13 +10,17 @@ jobs:
   bench:
     name: Run benchmarks
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: file_search
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
-          cache: true
+          go-version-file: file_search/go.mod
+          cache-dependency-path: file_search/go.sum
 
       - name: Drop OS page cache
         run: sudo sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches' || true
@@ -46,5 +50,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bench-results-${{ github.sha }}
-          path: current.txt
+          path: file_search/current.txt
           retention-days: 30

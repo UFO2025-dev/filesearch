@@ -7,25 +7,22 @@ on:
     branches: ["main", "master"]
 
 jobs:
-  build-and-test:
-    name: Build & Test
+  build-test:
+    name: Build / Test / Vet
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: file_search
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version-file: file_search/go.mod
           cache-dependency-path: file_search/go.sum
 
-      - name: Build
+      - name: Build (Linux)
         run: go build ./...
 
       - name: Vet
@@ -33,3 +30,55 @@ jobs:
 
       - name: Test (race detector)
         run: go test -race -count=1 -timeout 120s ./...
+
+  windows-cross:
+    name: Cross-compile Windows/amd64
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: file_search
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: file_search/go.mod
+          cache-dependency-path: file_search/go.sum
+
+      - name: Cross-compile .exe
+        run: |
+          GOOS=windows GOARCH=amd64 go build \
+            -ldflags="-X main.Version=ci-${GITHUB_SHA::8}" \
+            -o filesearch.exe \
+            ./cmd/server/
+        env:
+          CGO_ENABLED: "0"
+
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: filesearch-windows-${{ github.sha }}
+          path: file_search/filesearch.exe
+          retention-days: 7
+
+  security:
+    name: Security scan (govulncheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: file_search
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: file_search/go.mod
+          cache-dependency-path: file_search/go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
