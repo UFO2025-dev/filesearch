@@ -292,6 +292,13 @@ func Run(ctx context.Context, database *db.DB, root string, extraExclude ...stri
 			mu.Unlock()
 			return nil
 		}
+		// Skip OneDrive / cloud-storage online-only placeholders (Windows).
+		// Accessing them would trigger a network download or fail when offline.
+		if isCloudPlaceholder(path) {
+			slog.Debug("indexer: skipping cloud placeholder", "path", path)
+			mu.Lock(); stats.Skipped++; mu.Unlock()
+			return nil
+		}
 		sem <- struct{}{}
 		wg.Add(1)
 		go func(p string) {
