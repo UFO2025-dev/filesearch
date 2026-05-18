@@ -448,8 +448,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var total, embedded int
 	if s.db != nil {
-		if paths, err := s.db.AllPaths(r.Context()); err == nil {
-			total = len(paths)
+		if n, err := s.db.FileCount(r.Context()); err == nil {
+			total = n
 		}
 		embedded, _ = s.db.VectorCount(r.Context())
 	}
@@ -481,7 +481,18 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, "dir must be an absolute path", http.StatusBadRequest)
 			return
 		}
-		info, err := os.Stat(clean)
+		// Reject UNC / network paths (\\server\share or //server/share).
+		if isUNCPath(clean) {
+			writeError(w, "network (UNC) paths are not supported", http.StatusBadRequest)
+			return
+		}
+		// Resolve symlinks so isSensitivePath sees the real target.
+		resolved, err := filepath.EvalSymlinks(clean)
+		if err != nil {
+			// Dir doesn't exist yet or symlink is broken.
+			resolved = clean
+		}
+		info, err := os.Stat(resolved)
 		if err != nil {
 			writeError(w, "directory does not exist or is not accessible", http.StatusBadRequest)
 			return
@@ -490,11 +501,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, "path is not a directory", http.StatusBadRequest)
 			return
 		}
-		if isSensitivePath(clean) {
+		if isSensitivePath(resolved) {
+			slog.Warn("handleSettings: sensitive path rejected", "path", resolved)
 			writeError(w, "cannot index system or sensitive directory", http.StatusForbidden)
 			return
 		}
-		req.Dir = clean
+		req.Dir = resolved
 	}
 	s.mu.Lock()
 	if req.ModeOverride == "auto" {
@@ -560,20 +572,47 @@ func isLibraryPath(path string) bool {
 }
 
 // isSensitivePath returns true for known system/OS directories that should not be indexed.
+// isSensitivePath returns true if p is a system directory that must never be indexed.
 func isSensitivePath(p string) bool {
 	lower := strings.ToLower(filepath.ToSlash(p))
 	prefixes := []string{
-		// Windows
-		"c:/windows", "c:/program files", "c:/program files (x86)",
-		"c:/programdata", "c:/system volume information",
-		// Linux / macOS
-		"/proc", "/sys", "/dev", "/run", "/boot",
+		// Windows system dirs
+		"c:/windows",
+		"c:/program files",
+		"c:/program files (x86)",
+		"c:/programdata",
+		"c:/system volume information",
+		"c:/recovery",
+		// Windows user credential dirs (any drive letter handled below)
+		"/appdata/roaming/microsoft/credentials",
+		"/appdata/roaming/microsoft/protect",
+		"/appdata/local/microsoft/credentials",
+		// Linux / macOS system dirs
+		"/proc", "/sys", "/dev", "/run", "/boot", "/etc",
 	}
 	for _, prefix := range prefixes {
 		if lower == prefix || strings.HasPrefix(lower, prefix+"/") {
 			return true
 		}
 	}
+	// Any drive letter: X:/Windows, X:/Program Files, etc.
+	if len(lower) >= 3 && lower[1] == ':' {
+		rest := lower[2:]
+		for _, p2 := range []string{"/windows", "/program files", "/program files (x86)", "/programdata"} {
+			if rest == p2 || strings.HasPrefix(rest, p2+"/") {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// isUNCPath returns true if p is a UNC path (\server\share or //server/share).
+// UNC paths are blocked by default — network shares may be slow, unavailable,
+// or outside the user's control.
+func isUNCPath(p string) bool {
+	// Normalise to forward slashes for consistent matching.
+	norm := filepath.ToSlash(p)
+	return strings.HasPrefix(norm, "//")
 }
 
