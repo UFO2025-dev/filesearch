@@ -1,0 +1,14 @@
+goos: linux
+goarch: amd64
+pkg: gatewatch/file_search/benchmarks
+cpu: Intel(R) Core(TM) i5-4200U CPU @ 1.60GHz
+BenchmarkDB_Upsert-4                           	    4502	    775732 ns/op	    1814 B/op	      53 allocs/op
+BenchmarkDB_UpsertUpdate-4                     	   17490	    121200 ns/op	    1425 B/op	      35 allocs/op
+BenchmarkDB_Search_1K-4                        	     712	   3447067 ns/op	    5897 B/op	      88 allocs/op
+BenchmarkDB_Count_10K-4                        	    2092	   1149383 ns/op	     597 B/op	      24 allocs/op
+BenchmarkDB_AllPaths_10K-4                     	     178	  13422018 ns/op	 1266269 B/op	   40026 allocs/op
+BenchmarkDB_FileCount_10K-4                    	   59474	     41216 ns/op	     376 B/op	      13 allocs/op
+BenchmarkSearch_WarmCache-4                    	 8497009	       270.7 ns/op	        93.00 ns/p50	       278.0 ns/p95	       279.0 ns/p99	       0 B/op	       0 allocs/op
+BenchmarkCache_InvalidateByPath_128entries-4   	 2398940	      1065 ns/op	     120 B/op	       2 allocs/op
+PASS
+ok  	gatewatch/file_search/benchmarks	144.102s

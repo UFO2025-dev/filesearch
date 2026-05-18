@@ -1,0 +1,50 @@
+name: Benchmark regression check
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  bench:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Drop OS page cache
+        run: sudo sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches' || true
+
+      - name: Run benchmarks
+        run: |
+          go test \
+            -run='^$' \
+            -bench='.' \
+            -benchmem \
+            -benchtime=3s \
+            -count=3 \
+            ./benchmarks/ | tee current.txt
+
+      - name: Compare with baseline
+        run: |
+          if [ -f benchmarks/results/baseline_linux.txt ]; then
+            python3 benchmarks/scripts/compare_baseline.py \
+              benchmarks/results/baseline_linux.txt \
+              current.txt \
+              --threshold 20
+          else
+            echo "No baseline found — skipping regression check"
+          fi
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ github.sha }}
+          path: current.txt
+          retention-days: 30
